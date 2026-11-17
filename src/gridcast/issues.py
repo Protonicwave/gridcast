@@ -1,4 +1,4 @@
-"""Forecast issues, as archived, parsed from Carbon Intensity API responses."""
+"""Forecast issues and actuals, as archived, parsed from Carbon Intensity API responses."""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -8,10 +8,12 @@ from gridcast._payload import as_int, as_list, forecast_value, member
 from gridcast.forecast import format_slot_time, parse_slot_start
 
 # Which of NESO's forecasts an issue comes from.
-IssueFeed = Literal["regional"]
+IssueFeed = Literal["regional", "national"]
 
 # The regional endpoint returns the 14 regions and then England, Scotland, Wales and GB.
 REGIONAL_AREA_IDS = frozenset(range(1, 19))
+# The regional endpoint's area for Great Britain, which the national forecast is filed under.
+GREAT_BRITAIN_AREA_ID = 18
 # The archive stores intensities as PostgreSQL smallint.
 MAX_INTENSITY_G_PER_KWH = 32_767
 
@@ -24,6 +26,25 @@ class Issue:
     area_id: int
     first_slot: datetime
     intensities_g_per_kwh: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Actual:
+    """The measured national intensity of the half hour starting at `slot_start`.
+
+    `intensity_g_per_kwh` is None until NESO publishes the measurement.
+    """
+
+    slot_start: datetime
+    intensity_g_per_kwh: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class Parsed:
+    """What one API response holds: forecast issues, actuals, or neither if it failed."""
+
+    issues: tuple[Issue, ...] = ()
+    actuals: tuple[Actual, ...] = ()
 
 
 def parse_regional_issues(payload: object) -> tuple[Issue, ...]:
@@ -65,9 +86,64 @@ def _areas_of(slot: object, where: str) -> dict[int, object]:
 
 
 def _intensity(entry: object, where: str) -> int:
-    value = forecast_value(member(entry, "intensity", where), where)
+    return _forecast(member(entry, "intensity", where), where)
+
+
+def _forecast(intensity: object, where: str) -> int:
+    return _within_smallint(forecast_value(intensity, where), "forecast", where)
+
+
+def _within_smallint(value: int, name: str, where: str) -> int:
     if value > MAX_INTENSITY_G_PER_KWH:
         raise ValueError(
-            f"{where}: expected a forecast of at most {MAX_INTENSITY_G_PER_KWH}, got {value}"
+            f"{where}: expected a {name} of at most {MAX_INTENSITY_G_PER_KWH}, got {value}"
         )
     return value
+
+
+def parse_national_issue(payload: object) -> Issue:
+    """The national fw48h forecast as one issue for Great Britain.
+
+    Raises ValueError naming the offending value if the payload is malformed.
+    """
+    starts, intensities = _national_slots(payload)
+    values = tuple(
+        _forecast(intensity, f"slot {position} ({format_slot_time(start)})")
+        for position, (start, intensity) in enumerate(zip(starts, intensities, strict=True))
+    )
+    return Issue("national", GREAT_BRITAIN_AREA_ID, starts[0], values)
+
+
+def parse_national_actuals(payload: object) -> tuple[Actual, ...]:
+    """The measured intensity of each half hour in a national intensity payload.
+
+    Raises ValueError naming the offending value if the payload is malformed.
+    """
+    starts, intensities = _national_slots(payload)
+    return tuple(
+        Actual(start, _actual(intensity, f"slot {position} ({format_slot_time(start)})"))
+        for position, (start, intensity) in enumerate(zip(starts, intensities, strict=True))
+    )
+
+
+def _national_slots(payload: object) -> tuple[list[datetime], list[object]]:
+    slots = as_list(member(payload, "data", "payload"), "data")
+    if not slots:
+        raise ValueError("data holds no slots")
+    starts: list[datetime] = []
+    for position, slot in enumerate(slots):
+        starts.append(parse_slot_start(slot, position, starts[-1] if starts else None))
+    intensities = [
+        member(slot, "intensity", f"slot {position}") for position, slot in enumerate(slots)
+    ]
+    return starts, intensities
+
+
+def _actual(intensity: object, where: str) -> int | None:
+    value = member(intensity, "actual", where)
+    if value is None:
+        return None
+    value = as_int(value, f"{where} actual")
+    if value < 0:
+        raise ValueError(f"{where}: expected a non-negative actual, got {value}")
+    return _within_smallint(value, "actual", where)

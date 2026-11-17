@@ -19,7 +19,7 @@ npm install
 
 ## Run
 
-Start the local PostgreSQL 17, create the archive's tables, then fetch and store the current regional forecast:
+Start the local PostgreSQL 17, create the archive's tables, then fetch and store the regional forecast, the national forecast and the last 24 hours of national actuals:
 
 ```sh
 docker compose up -d --wait db
@@ -28,7 +28,7 @@ uv run gridcast-migrate
 uv run gridcast-collect
 ```
 
-`gridcast-collect` exits 1 if the fetch, the parse or the write failed, and 2 if `GRIDCAST_DATABASE_URL` is unset. The raw response is stored even when it does not parse. The test suite empties this database, so do not keep data in it.
+`gridcast-collect` exits 1 if any fetch, parse or write failed, and 2 if `GRIDCAST_DATABASE_URL` is unset. Each call is stored on its own, with the raw response even when it does not parse. The view `collection_coverage` gives the share of half hours with a regional forecast recorded per UTC day, and `forecast_value` lists every forecast intensity with its horizon. The test suite empties this database, so do not keep data in it.
 
 Open `mockup/mockup.html` in a browser. The postcode lookup calls NESO's Carbon Intensity API, so it needs a network connection; everything else works offline.
 

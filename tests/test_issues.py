@@ -1,13 +1,20 @@
 import json
+import re
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
-from factories import FIRST_SLOT, payload, slot
+from factories import FIRST_SLOT, national_payload, payload, slot
 
-from gridcast.issues import Issue, parse_regional_issues
+from gridcast.issues import (
+    Actual,
+    Issue,
+    parse_national_actuals,
+    parse_national_issue,
+    parse_regional_issues,
+)
 
 SAVED_RESPONSE = Path(__file__).parent.parent / "data" / "regional_fw48h_20261117T1150Z.json"
 
@@ -111,3 +118,72 @@ def test_rejects_malformed_payload_naming_the_value(
 def test_rejects_wrong_shape_naming_the_value(data: object, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         parse_regional_issues(data)
+
+
+def test_parses_the_national_forecast_as_one_issue_for_great_britain() -> None:
+    issue = parse_national_issue(national_payload(150, None, None))
+    assert issue == Issue("national", 18, FIRST_SLOT, (200, 201, 202))
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (lambda data: data.update(data=[]), "data holds no slots"),
+        (lambda data: data["data"][1].pop("intensity"), "slot 1: missing key 'intensity'"),
+        (
+            lambda data: data["data"][1]["intensity"].update(forecast=None),
+            "slot 1 (2026-11-17T12:00Z) forecast: expected an integer, got None",
+        ),
+        (
+            lambda data: data["data"][1]["intensity"].update(forecast=-4),
+            "expected a non-negative forecast, got -4",
+        ),
+        (
+            lambda data: data["data"][1]["intensity"].update(forecast=32_768),
+            "expected a forecast of at most 32767, got 32768",
+        ),
+        (
+            lambda data: data["data"][0].update({"from": "2026-11-17T11:10Z"}),
+            "expected a first start on the hour or half hour",
+        ),
+    ],
+)
+def test_rejects_a_malformed_national_forecast_naming_the_value(
+    change: Callable[[dict[str, Any]], object], message: str
+) -> None:
+    data = national_payload(None, None, None)
+    change(data)
+    with pytest.raises(ValueError, match=re.escape(message)):
+        parse_national_issue(data)
+
+
+def test_parses_national_actuals_keeping_a_missing_one_as_none() -> None:
+    actuals = parse_national_actuals(national_payload(150, 160, None))
+    assert actuals == (
+        Actual(FIRST_SLOT, 150),
+        Actual(FIRST_SLOT + timedelta(minutes=30), 160),
+        Actual(FIRST_SLOT + timedelta(minutes=60), None),
+    )
+
+
+@pytest.mark.parametrize(
+    ("actual", "message"),
+    [("high", "got 'high'"), (-1, "non-negative actual, got -1"), (32_768, "at most 32767")],
+)
+def test_rejects_a_malformed_actual_naming_the_value(actual: object, message: str) -> None:
+    data = national_payload(150, 160)
+    data["data"][1]["intensity"]["actual"] = actual
+    with pytest.raises(ValueError, match=message):
+        parse_national_actuals(data)
+
+
+def test_rejects_national_actuals_with_no_slots() -> None:
+    with pytest.raises(ValueError, match="data holds no slots"):
+        parse_national_actuals({"data": []})
+
+
+def test_rejects_national_actuals_with_a_gap() -> None:
+    data = national_payload(150, 160, 170)
+    del data["data"][1]
+    with pytest.raises(ValueError, match="slot 1: expected start 2026-11-17T12:00Z"):
+        parse_national_actuals(data)

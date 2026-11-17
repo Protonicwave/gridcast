@@ -52,6 +52,16 @@ def regional_forecast_path(moment: datetime) -> str:
     return f"/regional/intensity/{format_slot_time(moment)}/fw48h"
 
 
+def national_forecast_path(moment: datetime) -> str:
+    """The national 48-hour forecast starting from the half hour that holds `moment`."""
+    return f"/intensity/{format_slot_time(moment)}/fw48h"
+
+
+def national_actuals_path(start: datetime, end: datetime) -> str:
+    """The national intensity, forecast and actual, from `start` to `end`."""
+    return f"/intensity/{format_slot_time(start)}/{format_slot_time(end)}"
+
+
 def fetch(path: str) -> FetchResult:
     """GET `path` under BASE_URL, retrying timeouts, connection errors, HTTP 429 and 5xx.
 

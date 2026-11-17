@@ -71,3 +71,17 @@ def all_areas(**extra: list[list[list[float]]]) -> dict[str, list[list[list[floa
     for area, rings in extra.items():
         placements[area.replace("_", " ")] += rings
     return placements
+
+
+def national_slot(position: int, actual: int | None = None) -> dict[str, Any]:
+    start = FIRST_SLOT + timedelta(minutes=SLOT_MINUTES * position)
+    return {
+        "from": format_slot_time(start),
+        "to": format_slot_time(start + timedelta(minutes=SLOT_MINUTES)),
+        "intensity": {"forecast": 200 + position, "actual": actual, "index": "moderate"},
+    }
+
+
+def national_payload(*actuals: int | None) -> dict[str, Any]:
+    """One national slot per given actual, the first at FIRST_SLOT."""
+    return {"data": [national_slot(position, actual) for position, actual in enumerate(actuals)]}
