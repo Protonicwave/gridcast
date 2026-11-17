@@ -8,6 +8,8 @@ dependencies = [
 ]
 
 [project.scripts]
+gridcast-collect = "gridcast.collect:main"
+gridcast-migrate = "gridcast.migrate:main"
 gridcast-snapshot = "gridcast.snapshot:main"
 
 [dependency-groups]
