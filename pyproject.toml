@@ -3,9 +3,13 @@ name = "gridcast"
 version = "0.1.0"
 description = "Regional forecast of the cleanest time to use electricity in Great Britain"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "psycopg[binary]==3.3.9",
+]
 
 [project.scripts]
+gridcast-collect = "gridcast.collect:main"
+gridcast-migrate = "gridcast.migrate:main"
 gridcast-snapshot = "gridcast.snapshot:main"
 
 [dependency-groups]
@@ -15,6 +19,7 @@ dev = [
     "pip-audit==2.10.0",
     "pytest==9.1.1",
     "ruff==0.16.9",
+    "sqlfluff==4.5.0",
     "vulture==2.14",
 ]
 
