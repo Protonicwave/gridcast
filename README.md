@@ -20,7 +20,7 @@ Open `mockup/mockup.html` in a browser. The postcode lookup calls NESO's Carbon 
 To rebuild the page's data from the files in `data/`:
 
 ```sh
-uv run gridcast-snapshot data/regional_fw48h_20261117T1150Z.json data/gb-dno-license-areas-20240503.geojson data/pilot_national_2025.json mockup/snapshot.js
+uv run gridcast-snapshot --fetched-at 2026-11-17T11:50Z data/regional_fw48h_20261117T1150Z.json data/gb-dno-license-areas-20240503.geojson data/pilot_national_2025.json mockup/snapshot.js
 ```
 
 ## Test

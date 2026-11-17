@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gridcast: when is your electricity cleanest?</title>
+<meta name="description" content="The cleanest time to use electricity in your part of Great Britain over the next 48 hours, and how far to trust the forecast.">
+<link rel="icon" href="data:,">
+<meta name="theme-color" content="#f8f9fb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#16191e" media="(prefers-color-scheme: dark)">
+<link rel="preload" href="fonts/source-sans-3-latin.woff2" as="font" type="font/woff2" crossorigin>
+<!-- Loaded in the head and started at the end of the body, so the first paint already holds the rendered forecast. -->
+<script src="snapshot.js"></script>
+<script src="app.js"></script>
+<style>
+@font-face {
+  font-family: "Source Sans 3";
+  src: url("fonts/source-sans-3-latin.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+/* Metric-matched fallback so the swap to the web font does not move the layout. */
+@font-face {
+  font-family: "Source Sans 3 fallback";
+  src: local("Arial");
+  size-adjust: 93%;
+  ascent-override: 110%;
+  descent-override: 31%;
+}
+
+:root {
+  color-scheme: light dark;
+
+  /* Neutrals tinted toward the Prussian blue of the Gridcast project document. */
+  --n-1: oklch(0.985 0.003 250);
+  --n-2: oklch(0.968 0.005 250);
+  --n-3: oklch(0.945 0.007 250);
+  --n-4: oklch(0.922 0.008 250);
+  --n-6: oklch(0.872 0.010 250);
+  --n-7: oklch(0.800 0.012 250);
+  --n-9: oklch(0.580 0.016 250);
+  --n-11: oklch(0.455 0.018 250);
+  --n-12: oklch(0.235 0.020 250);
+
+  --accent: oklch(0.400 0.085 250);
+  --accent-hover: oklch(0.460 0.090 250);
+  --accent-press: oklch(0.350 0.080 250);
+  --accent-wash: oklch(0.400 0.085 250 / 0.13);
+  --accent-on: oklch(0.985 0.003 250);
+  --focus: oklch(0.520 0.140 250);
+
+  --warning-ink: oklch(0.420 0.100 60);
+  --warning-wash: oklch(0.950 0.040 80);
+  --danger-ink: oklch(0.450 0.140 28);
+  --danger-wash: oklch(0.955 0.030 28);
+  --mockup-ink: oklch(0.430 0.110 300);
+  --mockup-wash: oklch(0.955 0.025 300);
+
+  --range-fill: oklch(0.235 0.020 250 / 0.17);
+  --halo: var(--n-1);
+  --map-label-ink: oklch(0.200 0.020 250);
+  --map-label-halo: oklch(0.985 0.003 250 / 0.88);
+
+  --font-text: "Source Sans 3", "Source Sans 3 fallback", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --step--1: 0.9375rem;
+  --step-0: 1.0625rem;
+  --step-1: clamp(1.25rem, 1.18rem + 0.3vw, 1.4rem);
+  --step-2: clamp(1.5rem, 1.33rem + 0.7vw, 1.875rem);
+  --step-4: clamp(2.125rem, 1.6rem + 2.3vw, 3.5rem);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  --radius-control: 6px;
+  --radius-panel: 10px;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-1: 120ms;
+
+  --page-max: 1240px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --n-1: oklch(0.190 0.012 250);
+    --n-2: oklch(0.220 0.013 250);
+    --n-3: oklch(0.250 0.014 250);
+    --n-4: oklch(0.280 0.015 250);
+    --n-6: oklch(0.340 0.016 250);
+    --n-7: oklch(0.420 0.018 250);
+    --n-9: oklch(0.600 0.018 250);
+    --n-11: oklch(0.760 0.014 250);
+    --n-12: oklch(0.945 0.006 250);
+
+    --accent: oklch(0.760 0.090 250);
+    --accent-hover: oklch(0.820 0.080 250);
+    --accent-press: oklch(0.700 0.090 250);
+    --accent-wash: oklch(0.760 0.090 250 / 0.16);
+    --accent-on: oklch(0.190 0.012 250);
+    --focus: oklch(0.780 0.120 250);
+
+    --warning-ink: oklch(0.850 0.100 80);
+    --warning-wash: oklch(0.300 0.050 70);
+    --danger-ink: oklch(0.820 0.100 28);
+    --danger-wash: oklch(0.300 0.060 28);
+    --mockup-ink: oklch(0.820 0.090 300);
+    --mockup-wash: oklch(0.270 0.040 300);
+
+    --range-fill: oklch(0.945 0.006 250 / 0.20);
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--n-1);
+  color: var(--n-12);
+  font-family: var(--font-text);
+  font-size: var(--step-0);
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+h1, h2, h3 { margin: 0; line-height: 1.15; text-wrap: balance; }
+h1 { font-size: var(--step-4); font-weight: 650; letter-spacing: -0.02em; line-height: 1.05; }
+h2 { font-size: var(--step-1); font-weight: 650; letter-spacing: -0.01em; }
+h3 { font-size: var(--step-0); font-weight: 650; }
+p { margin: 0; text-wrap: pretty; }
+a { color: var(--accent); text-underline-offset: 0.15em; }
+a:hover { color: var(--accent-hover); }
+.nowrap { white-space: nowrap; }
+.muted { color: var(--n-11); }
+.small { font-size: var(--step--1); }
+
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+
+/* Mock-up controls: deliberately not product styling, so no one mistakes them for the site. */
+.mockup-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+  background: var(--mockup-wash);
+  color: var(--mockup-ink);
+  border-top: 1px dashed var(--mockup-ink);
+  font-size: var(--step--1);
+}
+body { padding-bottom: 96px; }
+html { scroll-padding-bottom: 104px; }
+.mockup-bar__inner {
+  max-width: var(--page-max); margin: 0 auto; padding: var(--space-2) var(--space-4);
+  display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); align-items: center;
+}
+.mockup-bar label { display: flex; gap: var(--space-2); align-items: center; }
+.mockup-bar select {
+  font: inherit; color: var(--n-12); background: var(--n-1);
+  border: 1px solid var(--mockup-ink); border-radius: var(--radius-control); padding: 2px var(--space-2);
+  max-width: 100%;
+}
+
+.site-header { border-bottom: 1px solid var(--n-6); }
+.site-header__inner {
+  max-width: var(--page-max); margin: 0 auto; padding: 0 var(--space-4);
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
+  min-height: 56px;
+}
+.wordmark { font-weight: 700; font-size: var(--step-1); letter-spacing: -0.015em; color: var(--n-12); text-decoration: none; }
+.wordmark:hover { color: var(--n-12); }
+.site-nav ul { list-style: none; margin: 0; padding: 0; display: flex; gap: var(--space-1); }
+.site-nav a {
+  display: block; padding: var(--space-3) var(--space-2); color: var(--n-11);
+  text-decoration: none; font-weight: 600; border-bottom: 2px solid transparent;
+}
+.site-nav a:hover { color: var(--n-12); }
+.site-nav a[aria-current="page"] { color: var(--n-12); border-bottom-color: var(--accent); }
+
+main { max-width: var(--page-max); margin: 0 auto; padding: var(--space-5) var(--space-4) var(--space-8); }
+
+.notice {
+  display: flex; gap: var(--space-3); align-items: flex-start;
+  padding: var(--space-3) var(--space-4); border-radius: var(--radius-panel);
+  margin-bottom: var(--space-5);
+}
+.notice svg { flex: none; margin-top: 3px; }
+.notice--warning { background: var(--warning-wash); color: var(--warning-ink); }
+.notice--danger { background: var(--danger-wash); color: var(--danger-ink); }
+.notice p { color: var(--n-12); }
+.notice strong { color: inherit; }
+
+.freshness { color: var(--n-11); font-size: var(--step--1); margin-bottom: var(--space-5); }
+
+/* Forecast view */
+.forecast-layout { display: grid; gap: var(--space-7); }
+@media (min-width: 960px) {
+  .forecast-layout { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: var(--space-7); align-items: start; }
+  .forecast-aside { position: sticky; top: var(--space-4); }
+}
+
+.postcode-form { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); align-items: end; margin-bottom: var(--space-6); }
+.field { display: grid; gap: var(--space-1); }
+.field > label, .field > .field__label { font-weight: 600; font-size: var(--step--1); }
+.field__hint { color: var(--n-11); font-size: var(--step--1); }
+.field__error { color: var(--danger-ink); font-size: var(--step--1); font-weight: 600; }
+input[type="text"], select.control {
+  font: inherit; font-size: max(16px, 1rem); color: var(--n-12); background: var(--n-1);
+  border: 1px solid var(--n-7); border-radius: var(--radius-control);
+  padding: 0 var(--space-3); min-height: 44px;
+}
+input[type="text"] { width: 10ch; text-transform: uppercase; }
+input[type="text"]::placeholder { text-transform: none; color: var(--n-9); }
+input[aria-invalid="true"] { border-color: var(--danger-ink); }
+input:disabled { background: var(--n-3); color: var(--n-9); }
+
+.button {
+  font: inherit; font-weight: 600; min-height: 44px; padding: 0 var(--space-4);
+  border-radius: var(--radius-control); border: 1px solid transparent; cursor: pointer;
+  display: inline-flex; align-items: center; gap: var(--space-2);
+}
+.button--primary { background: var(--accent); color: var(--accent-on); }
+.button--primary:hover { background: var(--accent-hover); }
+.button--primary:active { background: var(--accent-press); }
+.button--quiet { background: transparent; color: var(--n-12); border-color: var(--n-7); }
+.button--quiet:hover { background: var(--n-3); }
+.button:disabled { cursor: not-allowed; opacity: 0.55; }
+.button[aria-busy="true"] { cursor: progress; }
+.postcode-form__or { color: var(--n-11); font-size: var(--step--1); padding-bottom: 11px; }
+
+.answer { display: grid; gap: var(--space-3); margin-bottom: var(--space-6); }
+.answer__label { font-weight: 600; color: var(--n-11); }
+.answer__detail { font-size: var(--step-1); line-height: 1.35; max-width: 42ch; }
+.answer__detail strong { font-weight: 650; }
+
+.segmented { display: inline-flex; border: 1px solid var(--n-7); border-radius: var(--radius-control); overflow: hidden; }
+.segmented input { position: absolute; opacity: 0; pointer-events: none; }
+.segmented label {
+  min-width: 52px; min-height: 40px; padding: 0 var(--space-3);
+  display: grid; place-items: center; cursor: pointer; font-weight: 600; color: var(--n-11);
+  border-left: 1px solid var(--n-7);
+}
+.segmented label:first-of-type { border-left: 0; }
+.segmented label:hover { background: var(--n-3); color: var(--n-12); }
+.segmented input:checked + label { background: var(--n-12); color: var(--n-1); }
+.segmented input:focus-visible + label { outline: 2px solid var(--focus); outline-offset: -2px; }
+.length-row { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); align-items: center; margin-bottom: var(--space-6); }
+.length-row legend { padding: 0; font-weight: 600; font-size: var(--step--1); margin-right: var(--space-2); float: left; line-height: 40px; }
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+
+.chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-2) var(--space-4); align-items: baseline; margin-bottom: var(--space-3); }
+.key { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); list-style: none; margin: 0; padding: 0; font-size: var(--step--1); color: var(--n-11); }
+.key li { display: flex; align-items: center; gap: var(--space-2); }
+.key__swatch { width: 18px; height: 10px; border-radius: 2px; flex: none; }
+.key__swatch--line { height: 2px; background: var(--n-12); }
+.key__swatch--window { background: var(--accent-wash); box-shadow: inset 0 2px 0 var(--accent); }
+.key__swatch--range { background: var(--range-fill); }
+
+.chart { position: relative; touch-action: pan-y; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart:focus-visible { outline-offset: 4px; border-radius: 4px; }
+.chart text { font-family: var(--font-text); font-size: 12px; fill: var(--n-11); }
+.chart .tick-day { font-weight: 650; fill: var(--n-12); }
+.chart .gridline { stroke: var(--n-6); stroke-width: 1; }
+.chart .dayline { stroke: var(--n-7); stroke-width: 1; }
+.chart .series { fill: none; stroke: var(--n-12); stroke-width: 2; stroke-linejoin: round; }
+.chart .range { fill: var(--range-fill); }
+.chart .window-band { fill: var(--accent-wash); }
+.chart .window-edge { stroke: var(--accent); stroke-width: 2.5; }
+.chart .window-label { fill: var(--accent); font-weight: 650; font-size: 12.5px; }
+.chart .now-line { stroke: var(--n-12); stroke-dasharray: 2 3; }
+.chart .now-label { fill: var(--n-12); font-weight: 650; }
+.chart .cursor-line { stroke: var(--n-12); stroke-width: 1; }
+.chart .cursor-dot { fill: var(--n-1); stroke: var(--n-12); stroke-width: 2; }
+.chart .halo { paint-order: stroke; stroke: var(--halo); stroke-width: 4px; stroke-linejoin: round; }
+
+.chart-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; margin-top: var(--space-3); }
+.chart-hint { color: var(--n-11); font-size: var(--step--1); }
+.range-note { margin-top: var(--space-3); font-size: var(--step--1); color: var(--n-11); max-width: 62ch; }
+
+.readout { margin-top: var(--space-6); padding-top: var(--space-5); border-top: 1px solid var(--n-6); }
+.readout__value { font-size: var(--step-2); font-weight: 650; letter-spacing: -0.01em; margin: var(--space-1) 0 var(--space-4); }
+.readout__band { display: block; margin-top: var(--space-1); font-size: var(--step-0); font-weight: 600; color: var(--n-11); letter-spacing: 0; }
+.mix { display: grid; grid-template-columns: max-content minmax(0, 1fr) 6ch; gap: var(--space-1) var(--space-3); align-items: center; margin: 0; max-width: 520px; }
+.mix dt { font-size: var(--step--1); }
+.mix dd { margin: 0; font-size: var(--step--1); text-align: right; color: var(--n-11); }
+.mix__bar { height: 8px; background: var(--n-4); border-radius: 2px; overflow: hidden; }
+.mix__bar span { display: block; height: 100%; background: var(--n-9); transform-origin: left; }
+
+/* Map */
+.map-head { display: flex; justify-content: space-between; gap: var(--space-3); align-items: baseline; margin-bottom: var(--space-3); flex-wrap: wrap; }
+.map { position: relative; }
+.map svg { display: block; width: 100%; height: auto; max-height: 72vh; }
+.map .region { stroke: var(--n-1); stroke-width: 0.8; vector-effect: non-scaling-stroke; cursor: pointer; fill-rule: evenodd; }
+.map .region:hover { stroke: var(--n-12); stroke-width: 1.5; }
+.map .region--selected { stroke: var(--n-12); stroke-width: 2.5; }
+.map .region--empty { fill: var(--n-4); cursor: default; }
+.map .inset-frame { fill: none; stroke: var(--n-7); stroke-width: 1; vector-effect: non-scaling-stroke; }
+/* Map labels sit on fills from pale to dark in either scheme, so they keep one dark-on-light treatment. */
+.map text { font-family: var(--font-text); fill: var(--map-label-ink); paint-order: stroke; stroke: var(--map-label-halo); stroke-linejoin: round; }
+.map .label-name { font-weight: 650; }
+.legend { margin-top: var(--space-3); font-size: var(--step--1); color: var(--n-11); max-width: 320px; }
+.legend__ramp { height: 10px; border-radius: 2px; margin-bottom: var(--space-1); }
+.legend__ticks { display: flex; justify-content: space-between; }
+
+.region-list { list-style: none; margin: var(--space-6) 0 0; padding: 0; }
+.region-list__head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; }
+.region-row {
+  width: 100%; font: inherit; color: inherit; text-align: left; cursor: pointer;
+  background: transparent; border: 0; border-radius: var(--radius-control);
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-2); min-height: 44px;
+}
+.region-row:hover { background: var(--n-3); }
+.region-row[aria-pressed="true"] { background: var(--accent-wash); }
+.region-row__name { font-weight: 600; font-size: var(--step--1); }
+.region-row__when { font-size: var(--step--1); color: var(--n-11); text-align: right; white-space: nowrap; }
+.region-row__strip { grid-column: 1 / -1; display: block; width: 100%; height: 12px; shape-rendering: crispEdges; }
+
+/* Accuracy view */
+.prose { max-width: 66ch; }
+.prose > * + * { margin-top: var(--space-4); }
+.section { margin-top: var(--space-8); }
+.section > h2 + * { margin-top: var(--space-4); }
+.figures { display: grid; gap: var(--space-5); margin: var(--space-5) 0 0; }
+@media (min-width: 760px) { .figures { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.figures div { border-top: 2px solid var(--n-12); padding-top: var(--space-3); }
+.figures dt { font-size: var(--step-2); font-weight: 650; letter-spacing: -0.01em; line-height: 1.2; }
+.figures dd { margin: var(--space-2) 0 0; color: var(--n-11); max-width: 34ch; }
+.caveat { margin-top: var(--space-5); padding-left: var(--space-4); border-left: 3px solid var(--warning-ink); max-width: 66ch; }
+.hour-chart svg { display: block; width: 100%; height: auto; max-width: 760px; }
+.hour-chart text { font-family: var(--font-text); font-size: 12px; fill: var(--n-11); }
+.hour-chart .bar { fill: var(--n-9); }
+.hour-chart .mean-line { stroke: var(--n-12); stroke-dasharray: 4 3; }
+.hypotheses { list-style: none; margin: var(--space-5) 0 0; padding: 0; display: grid; gap: var(--space-5); max-width: 72ch; }
+.hypotheses li { display: grid; grid-template-columns: 3rem minmax(0, 1fr); gap: var(--space-1) var(--space-3); }
+.hypotheses__id { font-weight: 700; color: var(--accent); grid-row: span 3; }
+.hypotheses__claim { font-weight: 650; }
+.hypotheses__status { font-size: var(--step--1); color: var(--n-11); }
+.status-pending { display: inline-block; padding: 0 var(--space-2); border: 1px solid var(--n-7); border-radius: var(--radius-control); margin-right: var(--space-2); color: var(--n-12); font-weight: 600; }
+.table-scroll { overflow-x: auto; max-width: 100%; }
+table.horizon { border-collapse: collapse; margin-top: var(--space-4); min-width: 520px; }
+table.horizon th, table.horizon td { text-align: left; padding: var(--space-2) var(--space-4) var(--space-2) 0; border-bottom: 1px solid var(--n-6); font-size: var(--step--1); }
+table.horizon thead th { color: var(--n-11); font-weight: 600; }
+table.horizon td { color: var(--n-9); }
+
+/* Alerts and Ask */
+.narrow { max-width: 640px; }
+.stack > * + * { margin-top: var(--space-5); }
+.choice { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: var(--space-1) var(--space-2); align-items: start; padding: var(--space-2) 0; }
+.choice input { width: 20px; height: 20px; margin: 2px 0 0; accent-color: var(--accent); }
+.choice .field__hint { grid-column: 2; }
+.notification {
+  display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: var(--space-1) var(--space-3);
+  padding: var(--space-3) var(--space-4); border-radius: 14px; max-width: 420px;
+  background: var(--n-2); border: 1px solid var(--n-6);
+  box-shadow: 0 1px 1px oklch(0.30 0.02 250 / 0.06), 0 2px 2px oklch(0.30 0.02 250 / 0.06), 0 4px 4px oklch(0.30 0.02 250 / 0.06), 0 8px 8px oklch(0.30 0.02 250 / 0.05);
+}
+.notification__icon { width: 36px; height: 36px; border-radius: 8px; background: var(--accent); color: var(--accent-on); display: grid; place-items: center; font-weight: 700; grid-row: span 2; }
+.notification__title { font-weight: 650; font-size: var(--step--1); }
+.notification__body { font-size: var(--step--1); }
+.confirmation { padding: var(--space-4); border-radius: var(--radius-panel); background: var(--accent-wash); }
+.confirmation p + p { margin-top: var(--space-2); }
+
+.chat { display: grid; gap: var(--space-4); margin-top: var(--space-6); }
+.chat__question { justify-self: end; max-width: 85%; background: var(--n-12); color: var(--n-1); padding: var(--space-3) var(--space-4); border-radius: var(--radius-panel) var(--radius-panel) 2px var(--radius-panel); }
+.chat__lookup { font-size: var(--step--1); color: var(--n-11); border-left: 2px solid var(--n-7); padding-left: var(--space-3); }
+.chat__lookup code { font-family: var(--font-mono); font-size: 0.9em; color: var(--n-12); }
+.chat__answer { max-width: 60ch; }
+.chat-form { display: flex; gap: var(--space-2); margin-top: var(--space-6); }
+.chat-form input[type="text"] { flex: 1; width: auto; text-transform: none; min-width: 0; }
+
+.site-footer { border-top: 1px solid var(--n-6); }
+.site-footer__inner { max-width: var(--page-max); margin: 0 auto; padding: var(--space-5) var(--space-4) var(--space-7); font-size: var(--step--1); color: var(--n-11); display: grid; gap: var(--space-2); }
+.site-footer p { max-width: 90ch; }
+
+[hidden] { display: none !important; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .button { transition: background-color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out); }
+  .button:active { transform: scale(0.97); }
+  .region-row { transition: background-color var(--dur-1) var(--ease-out); }
+}
+
+@media (max-width: 420px) {
+  .site-nav a { padding: var(--space-3) 6px; font-size: var(--step--1); }
+  .wordmark { font-size: var(--step-0); }
+}
+</style>
+</head>
+<body>
+
+
+<header class="site-header">
+  <div class="site-header__inner">
+    <a class="wordmark" href="#forecast">Gridcast</a>
+    <nav class="site-nav" aria-label="Main">
+      <ul>
+        <li><a href="#forecast" data-view-link="forecast">Forecast</a></li>
+        <li><a href="#accuracy" data-view-link="accuracy">Accuracy</a></li>
+        <li><a href="#alerts" data-view-link="alerts">Alerts</a></li>
+        <li><a href="#ask" data-view-link="ask">Ask</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <section id="view-forecast" data-view="forecast" aria-labelledby="answer-heading">
+    <div class="notice notice--warning" id="notice-stale" role="status" hidden>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      <p><strong>This forecast is 2&nbsp;hours old.</strong> NESO normally updates it every half hour, and Gridcast has not received the latest one, so the times below may have moved.</p>
+    </div>
+
+    <p class="freshness" id="freshness"></p>
+
+    <div class="forecast-layout">
+      <div class="forecast-main">
+
+        <div id="answer" class="answer" aria-live="polite"></div>
+
+        <form class="postcode-form" id="postcode-form" novalidate>
+          <div class="field">
+            <label for="postcode">Your postcode</label>
+            <input type="text" id="postcode" name="postcode" placeholder="e.g. BS1" autocomplete="postal-code" inputmode="text" spellcheck="false" aria-describedby="postcode-message">
+          </div>
+          <button class="button button--quiet" type="submit" id="postcode-submit">Find region</button>
+          <span class="postcode-form__or">or pick a region on the map</span>
+          <p class="field__error" id="postcode-message" role="alert" hidden></p>
+        </form>
+
+        <div id="forecast-detail">
+          <fieldset class="length-row" id="length-row">
+            <legend>Window length</legend>
+            <div class="segmented" id="length-options"></div>
+          </fieldset>
+
+          <div class="chart-head">
+            <h2 id="chart-heading"></h2>
+            <ul class="key" id="chart-key"></ul>
+          </div>
+          <div class="chart" id="chart" tabindex="0" role="slider" aria-valuemin="0" aria-valuenow="0" aria-labelledby="chart-heading"></div>
+          <div class="chart-actions">
+            <button class="button button--quiet" type="button" id="play">Play the next 48 hours</button>
+            <span class="chart-hint">Drag along the chart, or use the arrow keys, to see any half hour on the map.</span>
+          </div>
+          <p class="range-note" id="range-note" hidden>The shaded range is where 8 in 10 outcomes should fall. It is illustrative here: Gridcast's own model is trained in week 8 of the project, and until then the site shows NESO's forecast on its own, without a range.</p>
+
+          <div class="readout" id="readout"></div>
+        </div>
+      </div>
+
+      <aside class="forecast-aside" aria-labelledby="map-heading">
+        <div class="map-head">
+          <h2 id="map-heading"></h2>
+        </div>
+        <div class="map" id="map"></div>
+        <div class="legend" aria-hidden="true">
+          <div class="legend__ramp" id="legend-ramp"></div>
+          <div class="legend__ticks"><span>0</span><span>100</span><span>200</span><span>300+ g CO<sub>2</sub> per kWh</span></div>
+        </div>
+
+        <div class="region-list__head" style="margin-top: var(--space-6)">
+          <h2 id="list-heading"></h2>
+        </div>
+        <ol class="region-list" id="region-list" aria-labelledby="list-heading"></ol>
+      </aside>
+    </div>
+  </section>
+
+  <section id="view-accuracy" data-view="accuracy" aria-labelledby="accuracy-heading" hidden>
+    <div class="prose">
+      <h1 id="accuracy-heading">How good is the forecast?</h1>
+      <p>A forecast is only useful if you know how far to trust it. NESO publishes no accuracy figure for its own carbon forecast, so Gridcast keeps every forecast as it was issued and checks it against what happened. This page grows as that record does.</p>
+    </div>
+
+    <div class="section">
+      <h2>What is known so far</h2>
+      <p class="prose">A pilot compared NESO's national forecast with its national actual for every half hour of 2025.</p>
+      <dl class="figures" id="pilot-figures"></dl>
+      <div class="caveat">
+        <p><strong>These figures probably flatter the forecast.</strong> The API keeps one forecast for each past half hour and does not say when it was made, so most of these errors come from forecasts made close to the time. Gridcast's own archive records when every forecast was issued, which is what makes the error a day or two ahead measurable.</p>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2 id="hour-heading">Average error by hour of day, 2025</h2>
+      <p class="prose muted small">Mean absolute error of NESO's national forecast, in g CO<sub>2</sub> per kWh, by hour in UTC. The dashed line is the year's average.</p>
+      <div class="hour-chart" id="hour-chart"></div>
+    </div>
+
+    <div class="section">
+      <h2>Four tests, fixed before the data</h2>
+      <p class="prose">Each claim was written down with the result that would disprove it before any of the data that tests it existed.</p>
+      <ol class="hypotheses">
+        <li>
+          <span class="hypotheses__id">H1</span>
+          <span class="hypotheses__claim">Gridcast's weather-driven model beats simple baselines.</span>
+          <span class="muted">Disproved if repeating yesterday, or the average of the last four weeks, is as accurate at any forecast horizon.</span>
+          <span class="hypotheses__status"><span class="status-pending">Not yet tested</span>Due in week 8 of 12.</span>
+        </li>
+        <li>
+          <span class="hypotheses__id">H2</span>
+          <span class="hypotheses__claim">NESO's forecast gets worse the further ahead it looks.</span>
+          <span class="muted">Disproved if its error 24 to 48 hours ahead is not clearly larger than 1 to 6 hours ahead.</span>
+          <span class="hypotheses__status"><span class="status-pending">Not yet tested</span>Due in week 6 of 12.</span>
+        </li>
+        <li>
+          <span class="hypotheses__id">H3</span>
+          <span class="hypotheses__claim">A day or two ahead, Gridcast is as accurate as NESO.</span>
+          <span class="muted">Disproved if NESO's error is clearly lower 24 to 48 hours ahead.</span>
+          <span class="hypotheses__status"><span class="status-pending">Not yet tested</span>Due in week 9 of 12.</span>
+        </li>
+        <li>
+          <span class="hypotheses__id">H4</span>
+          <span class="hypotheses__claim">The recommended window is close to the best one.</span>
+          <span class="muted">Disproved if, on fewer than 70 in 100 days, the three hours recommended at 18:00 the evening before come within 10% of that day's cleanest three hours.</span>
+          <span class="hypotheses__status"><span class="status-pending">Not yet tested</span>Due in week 10 of 12.</span>
+        </li>
+      </ol>
+    </div>
+
+    <div class="section">
+      <h2>Error by how far ahead the forecast looks</h2>
+      <p class="prose">Average error in g CO<sub>2</sub> per kWh against NESO's national actual. Each figure will carry its 95% interval.</p>
+      <div class="table-scroll">
+        <table class="horizon">
+          <caption class="visually-hidden">Forecast error by horizon, not yet measured</caption>
+          <thead><tr><th scope="col">Forecast</th><th scope="col">1 to 6 h ahead</th><th scope="col">6 to 12 h</th><th scope="col">12 to 24 h</th><th scope="col">24 to 48 h</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">NESO</th><td>From week 6</td><td>From week 6</td><td>From week 6</td><td>From week 6</td></tr>
+            <tr><th scope="row">Gridcast</th><td>From week 8</td><td>From week 8</td><td>From week 8</td><td>From week 8</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section prose">
+      <h2>What these numbers cannot tell you</h2>
+      <p>There is no published actual for each region, only for Great Britain as a whole. Regional forecasts are checked against NESO's latest estimate for the half hour, which is itself a model, so the verdicts above rest on the national comparison.</p>
+      <p>The figures are for average carbon intensity. Using electricity at a cleaner time adds load that the grid meets from whichever plant is on the margin, which can be dirtier than the average, so a cleaner window does not mean an equal cut in your emissions.</p>
+      <p>The first verdicts will come from autumn and winter. Solar power moves the cleanest hours towards midday in summer, so they should be repeated after a full year.</p>
+    </div>
+  </section>
+
+  <section id="view-alerts" data-view="alerts" aria-labelledby="alerts-heading" hidden>
+    <div class="narrow stack">
+      <h1 id="alerts-heading">Get told before the cleanest window</h1>
+      <p class="answer__detail" style="max-width: 46ch">Gridcast can send a notification to this device when your region's cleanest window is coming up.</p>
+
+      <form id="alerts-form" class="stack" novalidate>
+        <div class="field">
+          <label for="alert-region">Region</label>
+          <select class="control" id="alert-region" name="region"></select>
+        </div>
+
+        <fieldset>
+          <legend class="field__label" style="font-weight:600;font-size:var(--step--1)">Window length</legend>
+          <div class="segmented" id="alert-length" style="margin-top: var(--space-2)"></div>
+        </fieldset>
+
+        <fieldset>
+          <legend class="field__label" style="font-weight:600;font-size:var(--step--1)">When to tell you</legend>
+          <label class="choice"><input type="radio" name="when" value="evening" checked><span>At 18:00 the evening before</span><span class="field__hint">Recommended. It gives you time to set a timer or plug in the car, and it is the forecast Gridcast's accuracy is scored on.</span></label>
+          <label class="choice"><input type="radio" name="when" value="hour"><span>One hour before it starts</span></label>
+          <label class="choice"><input type="radio" name="when" value="start"><span>When it starts</span></label>
+        </fieldset>
+
+        <label class="choice"><input type="checkbox" name="skip" checked><span>Skip days when timing makes little difference</span><span class="field__hint">You get fewer alerts, and each one is worth acting on.</span></label>
+
+        <div>
+          <h2 style="font-size: var(--step-0); margin-bottom: var(--space-3)">What the alert will say</h2>
+          <div class="notification" aria-live="polite">
+            <span class="notification__icon" aria-hidden="true">G</span>
+            <span class="notification__title">Gridcast</span>
+            <span class="notification__body" id="alert-preview"></span>
+          </div>
+        </div>
+
+        <p class="small muted">On an iPhone or iPad, add Gridcast to your Home Screen first (Share, then Add to Home Screen). Safari sends web notifications only to sites opened from the Home Screen, on iOS 16.4 or later.</p>
+
+        <div>
+          <button class="button button--primary" type="submit" id="alerts-submit">Turn on alerts</button>
+        </div>
+      </form>
+
+      <div class="confirmation" id="alerts-confirmation" role="status" hidden>
+        <p><strong id="alerts-confirmation-text"></strong></p>
+        <p class="small">To keep your alerts on other devices, sign in with [sign-in method].</p>
+        <p style="margin-top: var(--space-3)"><button class="button button--quiet" type="button" id="alerts-off">Turn off alerts</button></p>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-ask" data-view="ask" aria-labelledby="ask-heading" hidden>
+    <div class="narrow">
+      <h1 id="ask-heading">Ask about the forecast</h1>
+      <p class="answer__detail" style="max-width: 46ch; margin-top: var(--space-3)">Ask in your own words. The assistant answers from Gridcast's forecast and accuracy figures, and shows what it looked up.</p>
+
+      <div class="chat" aria-label="Example conversation">
+        <p class="chat__question">When should I charge my car in Bristol?</p>
+        <p class="chat__lookup" id="ask-lookup"></p>
+        <p class="chat__answer" id="ask-answer"></p>
+      </div>
+
+      <form class="chat-form" onsubmit="return false">
+        <label class="visually-hidden" for="ask-input">Your question</label>
+        <input type="text" id="ask-input" placeholder="Not connected in this mock-up" disabled>
+        <button class="button button--primary" type="submit" disabled>Ask</button>
+      </form>
+      <p class="small muted" style="margin-top: var(--space-2)">[n] questions left today.</p>
+    </div>
+  </section>
+
+  <section id="view-unavailable" hidden>
+    <div class="notice notice--danger" role="alert">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg>
+      <p><strong>Gridcast can't load the forecast right now.</strong> Nothing is shown rather than an old forecast that might send you to the wrong time. Try again in a few minutes.</p>
+    </div>
+    <button class="button button--quiet" type="button" id="retry">Try again</button>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="site-footer__inner">
+    <p>Forecast data from the Carbon Intensity API, National Energy System Operator, under CC BY 4.0. Supported by National Energy SO Open Data. Region boundaries from the NESO Data Portal under the NESO Open Data Licence.</p>
+    <p>Gridcast shows when electricity is forecast to be cleanest on average. It does not measure a cut in any household's emissions.</p>
+  </div>
+</footer>
+
+<div class="mockup-bar" role="region" aria-label="Mock-up controls">
+  <div class="mockup-bar__inner">
+    <span><strong>Mock-up.</strong> Real NESO forecast saved on <span class="nowrap" id="mockup-fetched"></span>; not live.</span>
+    <label>Show state
+      <select id="mockup-state">
+        <option value="live">Normal</option>
+        <option value="first">First visit, no region chosen</option>
+        <option value="loading">Loading</option>
+        <option value="stale">Forecast late</option>
+        <option value="unavailable">Forecast unavailable</option>
+        <option value="range">After week 8: Gridcast range (illustrative)</option>
+      </select>
+    </label>
+  </div>
+</div>
+
+<script>start();</script>
+</body>
+</html>
