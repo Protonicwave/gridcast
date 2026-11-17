@@ -79,10 +79,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         applied_names = apply_migrations(connection)
         log.info("migrations applied count=%d names=%s", len(applied_names), applied_names)
         if collector_password:
-            # ALTER ROLE takes no bind parameters, so the password goes in as a quoted literal.
+            # The SCRAM verifier is computed here, so the password itself never reaches the
+            # server, where a failed statement's text is logged. ALTER ROLE takes no bind
+            # parameters, so the verifier goes in as a quoted literal.
+            verifier = connection.pgconn.encrypt_password(
+                collector_password.encode(), b"gridcast_collector", b"scram-sha-256"
+            )
             connection.execute(
                 sql.SQL("alter role gridcast_collector login password {}").format(
-                    sql.Literal(collector_password)
+                    sql.Literal(verifier.decode())
                 )
             )
             log.info("collector login enabled")
