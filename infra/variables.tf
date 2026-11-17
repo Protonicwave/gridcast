@@ -14,13 +14,7 @@ variable "healthcheck_url" {
   sensitive   = true
 
   validation {
-    condition     = startswith(var.healthcheck_url, "https://")
-    error_message = "Expected an https URL."
+    condition     = can(regex("^https://[^/]+/", var.healthcheck_url))
+    error_message = "Expected an https URL with a host."
   }
-}
-
-variable "location" {
-  description = "Azure region for every resource. Azure for Students allows few regions; Norway East offers both PostgreSQL B1ms and Container Apps jobs."
-  type        = string
-  default     = "norwayeast"
 }

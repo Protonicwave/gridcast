@@ -37,6 +37,9 @@ provider "azurerm" {
 }
 
 locals {
+  # Azure for Students allows few regions; Norway East offers both PostgreSQL B1ms and
+  # Container Apps jobs. Moving would replace every resource, the archive included.
+  location      = "norwayeast"
   database_name = "gridcast"
   database_host = azurerm_postgresql_flexible_server.archive.fqdn
   # verify-full checks the server certificate against the image's system roots.
@@ -47,7 +50,7 @@ locals {
 
 resource "azurerm_resource_group" "gridcast" {
   name     = "rg-gridcast"
-  location = var.location
+  location = local.location
 }
 
 resource "azurerm_log_analytics_workspace" "gridcast" {
@@ -126,6 +129,8 @@ resource "azurerm_postgresql_flexible_server" "archive" {
   public_network_access_enabled = true
 
   lifecycle {
+    # The archive cannot be backfilled, so a change that replaces the server fails.
+    prevent_destroy = true
     # Azure picks the availability zone, and it cannot be changed afterwards.
     ignore_changes = [zone]
   }
@@ -136,10 +141,16 @@ resource "azurerm_postgresql_flexible_server_database" "archive" {
   server_id = azurerm_postgresql_flexible_server.archive.id
   charset   = "UTF8"
   collation = "en_US.utf8"
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # The range 0.0.0.0 to 0.0.0.0 is Azure's notation for services inside Azure,
-# which is where the jobs run. Nothing outside Azure can reach the server.
+# which is where the jobs run. That includes other customers' services, so the
+# passwords are the barrier; a private network would cost more than the data,
+# which is public, is worth protecting.
 resource "azurerm_postgresql_flexible_server_firewall_rule" "azure_services" {
   name             = "allow-azure-services"
   server_id        = azurerm_postgresql_flexible_server.archive.id
@@ -153,8 +164,9 @@ resource "azurerm_container_app_job" "collect" {
   resource_group_name          = azurerm_resource_group.gridcast.name
   container_app_environment_id = azapi_resource.environment.id
   workload_profile_name        = "Consumption"
-  # Three calls of at most 75 s each, retries included, fit inside this limit.
-  replica_timeout_in_seconds = 240
+  # Worst case 245 s: three calls of 75 s with retries, a 10 s database connect
+  # and a 10 s ping.
+  replica_timeout_in_seconds = 300
   # A failed run is not repeated: the next scheduled run is 30 minutes away.
   replica_retry_limit = 0
 
