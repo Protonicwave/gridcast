@@ -10,10 +10,13 @@ from importlib.resources import files
 from typing import Any
 
 import psycopg
+from psycopg import sql
 
 from gridcast.archive import CONNECT_TIMEOUT_SECONDS, DATABASE_URL_VARIABLE
 
 EXIT_USAGE = 2
+# S105 reads the variable's name as a password; the password is its value.
+COLLECTOR_PASSWORD_VARIABLE = "GRIDCAST_COLLECTOR_PASSWORD"  # noqa: S105
 
 # Any fixed key works, provided nothing else in the database takes the same advisory lock.
 _LOCK_KEY = 0x6772_6964
@@ -63,14 +66,24 @@ def _migrations() -> list[tuple[int, str, bytes]]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     argparse.ArgumentParser(
-        description=f"Apply pending migrations to the database at ${DATABASE_URL_VARIABLE}."
+        description=f"Apply pending migrations to the database at ${DATABASE_URL_VARIABLE}. "
+        f"If ${COLLECTOR_PASSWORD_VARIABLE} is set, let the collector's role log in with it."
     ).parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     database_url = os.environ.get(DATABASE_URL_VARIABLE)
     if not database_url:
         print(f"gridcast-migrate: {DATABASE_URL_VARIABLE} is not set", file=sys.stderr)
         return EXIT_USAGE
+    collector_password = os.environ.get(COLLECTOR_PASSWORD_VARIABLE)
     with psycopg.connect(database_url, connect_timeout=CONNECT_TIMEOUT_SECONDS) as connection:
         applied_names = apply_migrations(connection)
-    log.info("migrations applied count=%d names=%s", len(applied_names), applied_names)
+        log.info("migrations applied count=%d names=%s", len(applied_names), applied_names)
+        if collector_password:
+            # ALTER ROLE takes no bind parameters, so the password goes in as a quoted literal.
+            connection.execute(
+                sql.SQL("alter role gridcast_collector login password {}").format(
+                    sql.Literal(collector_password)
+                )
+            )
+            log.info("collector login enabled")
     return 0
