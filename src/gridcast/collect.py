@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import time
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -38,7 +39,6 @@ from gridcast.issues import (
 EXIT_FAILED = 1
 EXIT_USAGE = 2
 
-# healthchecks.io emails when these pings stop, so a lost ping is covered by its grace period.
 HEALTHCHECK_URL_VARIABLE = "GRIDCAST_HEALTHCHECK_URL"
 HEALTHCHECK_TIMEOUT_SECONDS = 10
 
@@ -90,10 +90,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"gridcast-collect: {DATABASE_URL_VARIABLE} is not set", file=sys.stderr)
         return EXIT_USAGE
     healthcheck_url = os.environ.get(HEALTHCHECK_URL_VARIABLE) or None
-    if healthcheck_url is not None and not healthcheck_url.startswith("https://"):
+    if healthcheck_url is not None and not _is_https_with_host(healthcheck_url):
         # The URL itself is a credential, so the message names only the variable.
         print(
-            f"gridcast-collect: {HEALTHCHECK_URL_VARIABLE} must start with https://",
+            f"gridcast-collect: {HEALTHCHECK_URL_VARIABLE} must be an https URL with a host",
             file=sys.stderr,
         )
         return EXIT_USAGE
@@ -102,14 +102,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         with psycopg.connect(database_url, connect_timeout=CONNECT_TIMEOUT_SECONDS) as connection:
             # Each call is stored on its own, so one failing leaves the others archived.
-            outcomes = {call.endpoint: _run(connection, call, now) for call in _CALLS}
+            is_stored_by_endpoint = {call.endpoint: _run(connection, call, now) for call in _CALLS}
     except psycopg.Error as err:
         log.error("archive connection failed error=%r", str(err))
         return EXIT_FAILED
-    if healthcheck_url is not None and outcomes["regional_forecast"]:
+    if healthcheck_url is not None and is_stored_by_endpoint["regional_forecast"]:
         _ping(healthcheck_url)
     log.info("run finished seconds=%.1f", time.monotonic() - started)
-    return 0 if all(outcomes.values()) else EXIT_FAILED
+    return 0 if all(is_stored_by_endpoint.values()) else EXIT_FAILED
+
+
+def _is_https_with_host(url: str) -> bool:
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme == "https" and bool(parts.hostname)
 
 
 def _ping(url: str) -> None:
@@ -119,7 +124,10 @@ def _ping(url: str) -> None:
     try:
         with urllib.request.urlopen(request, timeout=HEALTHCHECK_TIMEOUT_SECONDS) as response:  # noqa: S310
             status: int = response.status
-    except (OSError, http.client.HTTPException) as err:
+    # A failed ping only logs: the check emails once pings stop for longer than its grace
+    # period, so one lost ping costs nothing, and the archive was written either way.
+    # ValueError covers a URL the network layer rejects, such as a host with an empty label.
+    except (OSError, http.client.HTTPException, ValueError) as err:
         log.error("health check ping failed error=%r", f"{type(err).__name__}: {err}")
         return
     log.info("health check pinged status=%d", status)
