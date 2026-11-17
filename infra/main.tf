@@ -13,6 +13,10 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.9"
     }
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.13.0"
+    }
   }
 
   # Created once by the commands in README.md. The state holds the database
@@ -56,11 +60,39 @@ resource "azurerm_log_analytics_workspace" "gridcast" {
   daily_quota_gb = 0.5
 }
 
-resource "azurerm_container_app_environment" "gridcast" {
-  name                       = "cae-gridcast"
-  location                   = azurerm_resource_group.gridcast.location
-  resource_group_name        = azurerm_resource_group.gridcast.name
-  log_analytics_workspace_id = azurerm_log_analytics_workspace.gridcast.id
+# azurerm cannot set the environment's mode, and Azure now defaults to express
+# environments, which cannot run jobs. The API's own resource can.
+resource "azapi_resource" "environment" {
+  type      = "Microsoft.App/managedEnvironments@2026-07-01"
+  name      = "cae-gridcast"
+  parent_id = azurerm_resource_group.gridcast.id
+  location  = azurerm_resource_group.gridcast.location
+  # environmentMode arrived in API version 2026-07-01, which azapi 2.13 has no
+  # schema for; Azure still validates the request.
+  schema_validation_enabled = false
+
+  body = {
+    properties = {
+      environmentMode  = "WorkloadProfiles"
+      workloadProfiles = [{ name = "Consumption", workloadProfileType = "Consumption" }]
+      appLogsConfiguration = {
+        destination = "log-analytics"
+        logAnalyticsConfiguration = {
+          customerId = azurerm_log_analytics_workspace.gridcast.workspace_id
+        }
+      }
+    }
+  }
+
+  sensitive_body = {
+    properties = {
+      appLogsConfiguration = {
+        logAnalyticsConfiguration = {
+          sharedKey = azurerm_log_analytics_workspace.gridcast.primary_shared_key
+        }
+      }
+    }
+  }
 }
 
 # Server names are global DNS names, so a suffix keeps this one unique.
@@ -119,7 +151,7 @@ resource "azurerm_container_app_job" "collect" {
   name                         = "caj-gridcast-collect"
   location                     = azurerm_resource_group.gridcast.location
   resource_group_name          = azurerm_resource_group.gridcast.name
-  container_app_environment_id = azurerm_container_app_environment.gridcast.id
+  container_app_environment_id = azapi_resource.environment.id
   # Three calls of at most 75 s each, retries included, fit inside this limit.
   replica_timeout_in_seconds = 240
   # A failed run is not repeated: the next scheduled run is 30 minutes away.
@@ -166,7 +198,7 @@ resource "azurerm_container_app_job" "migrate" {
   name                         = "caj-gridcast-migrate"
   location                     = azurerm_resource_group.gridcast.location
   resource_group_name          = azurerm_resource_group.gridcast.name
-  container_app_environment_id = azurerm_container_app_environment.gridcast.id
+  container_app_environment_id = azapi_resource.environment.id
   replica_timeout_in_seconds   = 120
   replica_retry_limit          = 0
 
