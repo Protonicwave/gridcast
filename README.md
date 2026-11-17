@@ -38,6 +38,17 @@ To rebuild the page's data from the files in `data/`:
 uv run gridcast-snapshot --fetched-at 2026-11-17T11:50Z data/regional_fw48h_20261117T1150Z.json data/gb-dno-license-areas-20240503.geojson data/pilot_national_2025.json mockup/snapshot.js
 ```
 
+## Image
+
+The collector job runs from `Dockerfile`, which installs the locked runtime dependencies and runs `gridcast-collect` as an unprivileged user:
+
+```sh
+docker build -t gridcast-collector .
+docker run --rm -e GRIDCAST_DATABASE_URL gridcast-collector
+```
+
+On each pull request, GitHub Actions runs the checks below and builds the image. On `main` it also pushes `ghcr.io/protonicwave/gridcast-collector:<commit sha>`.
+
 ## Test
 
 The suite needs the local database running (`docker compose up -d --wait db`).

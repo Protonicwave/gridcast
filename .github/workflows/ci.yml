@@ -1,0 +1,80 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      db:
+        image: postgres:17.10-alpine
+        env:
+          POSTGRES_USER: gridcast
+          POSTGRES_DB: gridcast
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gridcast -d gridcast"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: 0.12.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: uv sync --locked
+      - run: npm ci
+      - run: uv run coverage run --branch --source=gridcast -m pytest -q
+      - run: >-
+          uv run coverage report --show-missing --fail-under=100
+          --include="src/gridcast/issues.py,src/gridcast/archive.py"
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run vulture src --min-confidence 80
+      - run: uv run sqlfluff lint src/gridcast/migrations
+      - run: npm run typecheck
+      - name: Audit locked dependencies
+        run: |
+          tmp="$(mktemp -d)"
+          uv export --format pylock.toml --no-emit-project -o "$tmp/pylock.toml"
+          uv run pip-audit --locked "$tmp"
+
+  image:
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/protonicwave/gridcast-collector:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: docker build --tag "$IMAGE" .
+      - name: Check the image runs as a non-root user
+        run: |
+          test "$(docker run --rm --entrypoint id "$IMAGE" -u)" != 0
+          docker run --rm "$IMAGE" --help
+      - name: Report the image size
+        run: "docker image inspect \"$IMAGE\" --format 'image size {{.Size}} bytes'"
+      - name: Publish the image
+        if: github.event_name == 'push'
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+          docker push "$IMAGE"
