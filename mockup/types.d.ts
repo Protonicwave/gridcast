@@ -31,23 +31,17 @@ interface PilotSummary {
   readonly maeLow: number;
   readonly maeHigh: number;
   readonly p95AbsoluteError: number;
-  readonly meanBias: number;
-  readonly mapePercent: number;
   readonly maeByHourUtc: readonly number[];
   readonly windowHours: number;
   readonly regretThreshold: number;
-  readonly daysAnalysed: number;
   readonly shareWithinThreshold: number;
   readonly shareExactBest: number;
-  readonly medianRegret: number;
-  readonly caveat: string;
 }
 
 interface Snapshot {
   readonly fetchedAt: string;
   readonly firstSlotStart: string;
   readonly slotMinutes: number;
-  readonly slotCount: number;
   readonly fuels: readonly string[];
   readonly viewBox: readonly [number, number, number, number];
   readonly shetlandFrame: readonly [number, number, number, number];

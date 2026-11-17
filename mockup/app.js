@@ -4,9 +4,17 @@ const SNAPSHOT = window.GRIDCAST_SNAPSHOT;
 const SLOT_MS = SNAPSHOT.slotMinutes * 60_000;
 const FIRST_SLOT_MS = Date.parse(SNAPSHOT.firstSlotStart);
 const FETCHED_MS = Date.parse(SNAPSHOT.fetchedAt);
+const SLOT_COUNT = at(SNAPSHOT.regions, 0).forecast.length;
 const DAY_MS = 86_400_000;
 const TIME_ZONE = "Europe/London";
 const DEFAULT_HOURS = 3;
+/** London, which the mock-up's state switcher and alert form fall back to when no region is chosen. */
+const DEFAULT_REGION_ID = 13;
+/** South West England, which covers Bristol in the assistant's example question. */
+const ASK_REGION_ID = 11;
+const ASK_HOURS = 4;
+const WINDOW_LABEL_HALF_WIDTH_PX = 40;
+const NOW_LABEL_CLEARANCE_PX = 48;
 const POSTCODE_TIMEOUT_MS = 8_000;
 const BUSY_DELAY_MS = 200;
 const PLAY_STEP_MS = 90;
@@ -33,10 +41,10 @@ const RAMP_STOPS = /** @type {const} */ ([
 
 const HOURS_NOUN = new Map([[1, "hour"], [2, "two hours"], [3, "three hours"], [4, "four hours"]]);
 const HOURS_ADJECTIVE = new Map([[1, "one-hour"], [2, "two-hour"], [3, "three-hour"], [4, "four-hour"]]);
-const FUEL_NAMES = new Map([
-  ["biomass", "Biomass"], ["coal", "Coal"], ["imports", "Imports"], ["gas", "Gas"], ["nuclear", "Nuclear"],
-  ["other", "Other"], ["hydro", "Hydro"], ["solar", "Solar"], ["wind", "Wind"],
-]);
+const LABEL_SIDES = [
+  { dx: 1, dy: 0, anchor: "start" }, { dx: -1, dy: 0, anchor: "end" },
+  { dx: 0, dy: -1, anchor: "middle" }, { dx: 0, dy: 1, anchor: "middle" },
+];
 const VIEWS = /** @type {const} */ (["forecast", "accuracy", "alerts", "ask"]);
 const MOCK_STATES = /** @type {const} */ (["live", "first", "loading", "stale", "unavailable", "range"]);
 const NON_GB_PREFIXES = new Map([
@@ -65,9 +73,9 @@ const state = {
   /** @type {number | null} */ regionId: null,
   hours: DEFAULT_HOURS,
   cursor: 0,
-  /** Top of the chart's value axis, set when the chart is drawn. */
-  chartTop: 100,
   /** @type {number | null} */ playTimer: null,
+  /** The postcode lookup in flight, aborted when a newer one starts. @type {AbortController | null} */
+  postcodeLookup: null,
 };
 
 /** @template T @param {readonly T[]} items @param {number} index @returns {T} */
@@ -145,6 +153,11 @@ function capitalise(text) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+/** The verb in agreement with "hour" or "hours": "starts" for one hour, "start" for more. @param {number} hours @param {string} verb */
+function agree(hours, verb) {
+  return hours === 1 ? `${verb}s` : verb;
+}
+
 /** @param {number} startSlot @param {number} slots */
 function windowPhrase(startSlot, slots) {
   const start = slotStartMs(startSlot);
@@ -178,8 +191,7 @@ function rampColour(value) {
       return `oklch(${mix(lower[1], upper[1]).toFixed(3)} ${mix(lower[2], upper[2]).toFixed(3)} ${mix(lower[3], upper[3]).toFixed(1)})`;
     }
   }
-  const last = at(RAMP_STOPS, RAMP_STOPS.length - 1);
-  return `oklch(${last[1]} ${last[2]} ${last[3]})`;
+  throw new RangeError(`expected a finite intensity, got ${value}`);
 }
 
 function rampGradient() {
@@ -206,8 +218,10 @@ function writeUrl() {
   if (state.regionId !== null) params.set("region", String(state.regionId));
   if (state.hours !== DEFAULT_HOURS) params.set("hours", String(state.hours));
   if (state.mockState !== "live") params.set("state", state.mockState);
-  const query = params.toString();
-  history.replaceState(null, "", `${query ? `?${query}` : location.pathname}#${state.view}`);
+  const url = new URL(location.href);
+  url.search = params.toString();
+  url.hash = state.view;
+  history.replaceState(null, "", url);
 }
 
 /** The region the forecast view shows, after the mock-up state is applied. */
@@ -240,7 +254,7 @@ function renderAnswer() {
   if (choice.timingMatters) {
     answer.innerHTML = `<p class="answer__label">Cleanest ${noun} in ${region.name}</p>
       <h1 id="answer-heading">${capitalise(windowPhrase(choice.cleanest.start, slots))}</h1>
-      <p class="answer__detail">About <strong class="nowrap">${grams(choice.cleanest.mean)}</strong> of CO<sub>2</sub> per kWh. The dirtiest ${noun}, ${windowPhrase(choice.dirtiest.start, slots)}, average <span class="nowrap">${grams(choice.dirtiest.mean)}</span>.</p>`;
+      <p class="answer__detail">About <strong class="nowrap">${grams(choice.cleanest.mean)}</strong> of CO<sub>2</sub> per kWh. The dirtiest ${noun}, ${windowPhrase(choice.dirtiest.start, slots)}, ${agree(state.hours, "average")} <span class="nowrap">${grams(choice.dirtiest.mean)}</span>.</p>`;
   } else {
     answer.innerHTML = `<p class="answer__label">Next 48 hours in ${region.name}</p>
       <h1 id="answer-heading">Any time works about as well</h1>
@@ -288,26 +302,25 @@ function rangePath(high, low, x, y) {
   return `${stepPath(high, x, y)}${back.join("")}Z`;
 }
 
-function chartGeometry() {
+/** The chart's size and scales for one region, shared by drawing, the cursor and pointer input. @param {SnapshotRegion} region */
+function chartScales(region) {
   const width = Math.max(byId("chart").clientWidth, 280);
   const height = width < NARROW_WIDTH_PX ? CHART_HEIGHT_NARROW_PX : CHART_HEIGHT_PX;
   const margin = { left: 36, right: 6, top: 30, bottom: 44 };
   const plotWidth = width - margin.left - margin.right;
   const plotBottom = height - margin.bottom;
-  return { width, height, margin, plotWidth, plotBottom };
+  const showRange = state.mockState === "range";
+  const top = niceCeiling(Math.max(...region.forecast, ...(showRange ? region.illustrativeRange.high : [0])));
+  const x = (/** @type {number} */ slot) => margin.left + (slot / SLOT_COUNT) * plotWidth;
+  const y = (/** @type {number} */ value) => margin.top + (1 - value / top) * (plotBottom - margin.top);
+  return { width, height, margin, plotWidth, plotBottom, showRange, top, x, y };
 }
 
 function renderChart() {
   const region = shownRegion();
   if (region === null || state.mockState === "loading") return;
-  const geometry = chartGeometry();
-  const { width, height, margin, plotWidth, plotBottom } = geometry;
-  const count = SNAPSHOT.slotCount;
-  const showRange = state.mockState === "range";
-  const top = niceCeiling(Math.max(...region.forecast, ...(showRange ? region.illustrativeRange.high : [0])));
-  state.chartTop = top;
-  const x =(/** @type {number} */ i) => margin.left + (i / count) * plotWidth;
-  const y = (/** @type {number} */ v) => margin.top + (1 - v / top) * (plotBottom - margin.top);
+  const { width, height, margin, plotWidth, plotBottom, showRange, top, x, y } = chartScales(region);
+  const count = SLOT_COUNT;
   const choice = windowChoice(region, state.hours);
   const slots = slotsFor(state.hours);
   const parts = [];
@@ -334,7 +347,7 @@ function renderChart() {
   if (choice.timingMatters) {
     parts.push(`<rect class="window-band" x="${windowLeft}" y="${margin.top}" width="${windowRight - windowLeft}" height="${plotBottom - margin.top}"/>`);
     parts.push(`<line class="window-edge" x1="${windowLeft}" x2="${windowRight}" y1="${margin.top}" y2="${margin.top}"/>`);
-    const labelX = Math.min(Math.max((windowLeft + windowRight) / 2, margin.left + 40), width - margin.right - 40);
+    const labelX = Math.min(Math.max((windowLeft + windowRight) / 2, margin.left + WINDOW_LABEL_HALF_WIDTH_PX), width - margin.right - WINDOW_LABEL_HALF_WIDTH_PX);
     parts.push(`<text class="window-label halo" x="${labelX}" y="${margin.top - 8}" text-anchor="middle">Cleanest ${state.hours} h</text>`);
   }
   if (showRange) parts.push(`<path class="range" d="${rangePath(region.illustrativeRange.high, region.illustrativeRange.low, x, y)}"/>`);
@@ -347,7 +360,7 @@ function renderChart() {
 
   const nowX = x((FETCHED_MS - FIRST_SLOT_MS) / SLOT_MS);
   parts.push(`<line class="now-line" x1="${nowX}" x2="${nowX}" y1="${margin.top}" y2="${plotBottom}"/>`);
-  if (!choice.timingMatters || windowLeft - nowX > 48) {
+  if (!choice.timingMatters || windowLeft - nowX > NOW_LABEL_CLEARANCE_PX) {
     parts.push(`<text class="now-label halo" x="${nowX}" y="${margin.top - 8}" text-anchor="start">Now</text>`);
   }
   parts.push(`<line class="cursor-line" id="cursor-line" y1="${margin.top}" y2="${plotBottom}"/>`);
@@ -362,15 +375,15 @@ function placeCursor() {
   const line = document.getElementById("cursor-line");
   const dot = document.getElementById("cursor-dot");
   if (region === null || line === null || dot === null) return;
-  const { margin, plotWidth, plotBottom } = chartGeometry();
-  const max = state.chartTop;
-  const centre = margin.left + ((state.cursor + 0.5) / SNAPSHOT.slotCount) * plotWidth;
+  const { x, y } = chartScales(region);
+  const centre = x(state.cursor + 0.5);
   const value = at(region.forecast, state.cursor);
   line.setAttribute("x1", centre.toFixed(1));
   line.setAttribute("x2", centre.toFixed(1));
   dot.setAttribute("cx", centre.toFixed(1));
-  dot.setAttribute("cy", (margin.top + (1 - value / max) * (plotBottom - margin.top)).toFixed(1));
+  dot.setAttribute("cy", y(value).toFixed(1));
   const chart = byId("chart");
+  chart.setAttribute("aria-valuemax", String(SLOT_COUNT - 1));
   chart.setAttribute("aria-valuenow", String(state.cursor));
   chart.setAttribute("aria-valuetext", `${slotPhrase(state.cursor)}, ${Math.round(value)} grams per kilowatt hour, ${at(region.index, state.cursor)}`);
 }
@@ -392,12 +405,13 @@ function renderChartFrame() {
 /** @param {number} clientX */
 function cursorFromPointer(clientX) {
   const svg = byId("chart").querySelector("svg");
-  if (svg === null) return;
+  const region = shownRegion();
+  if (svg === null || region === null) return;
   const box = svg.getBoundingClientRect();
-  const { width, margin, plotWidth } = chartGeometry();
+  const { width, margin, plotWidth } = chartScales(region);
   const px = ((clientX - box.left) / box.width) * width;
-  const slot = Math.floor(((px - margin.left) / plotWidth) * SNAPSHOT.slotCount);
-  setCursor(Math.min(Math.max(slot, 0), SNAPSHOT.slotCount - 1));
+  const slot = Math.floor(((px - margin.left) / plotWidth) * SLOT_COUNT);
+  setCursor(Math.min(Math.max(slot, 0), SLOT_COUNT - 1));
 }
 
 /** @param {number} slot */
@@ -417,7 +431,7 @@ function renderReadout() {
   const value = at(region.forecast, state.cursor);
   const mix = at(region.mix, state.cursor);
   const rows = SNAPSHOT.fuels
-    .map((fuel, i) => ({ name: FUEL_NAMES.get(fuel) ?? fuel, share: at(mix, i) }))
+    .map((fuel, i) => ({ name: capitalise(fuel), share: at(mix, i) }))
     .filter((row) => row.share >= MIX_MIN_SHARE_PERCENT)
     .sort((a, b) => b.share - a.share)
     .map((row) => `<dt>${row.name}</dt><dd class="mix__bar" aria-hidden="true"><span style="transform: scaleX(${(row.share / 100).toFixed(3)})"></span></dd><dd>${row.share.toFixed(0)}%</dd>`);
@@ -471,25 +485,41 @@ function overlaps(a, b) {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
+/**
+ * Moves the label to the first side of its anchor where it stays inside the map and clear of earlier labels.
+ * @param {SVGTextElement} text @param {readonly [number, number]} anchor @param {number} gap @param {number} size
+ * @param {DOMRect} view @param {readonly (DOMRect | SVGRect)[]} taken
+ * @returns {DOMRect | null} the label's box, or null when no side is clear
+ */
+function placeLabel(text, anchor, gap, size, view, taken) {
+  const [ax, ay] = anchor;
+  for (const side of LABEL_SIDES) {
+    const baselineOffset = side.dy === 0 ? size * 0.35 : side.dy > 0 ? size : 0;
+    text.setAttribute("x", (ax + side.dx * gap).toFixed(2));
+    text.setAttribute("y", (ay + side.dy * gap + baselineOffset).toFixed(2));
+    text.setAttribute("text-anchor", side.anchor);
+    const labelBox = text.getBBox();
+    const inside = labelBox.x >= view.x && labelBox.y >= view.y
+      && labelBox.x + labelBox.width <= view.x + view.width && labelBox.y + labelBox.height <= view.y + view.height;
+    if (inside && !taken.some((other) => overlaps(labelBox, other))) return labelBox;
+  }
+  return null;
+}
+
 function renderMapLabels() {
   const svg = byId("map").querySelector("svg");
   const layer = document.getElementById("map-labels");
   if (svg === null || layer === null) return;
   layer.replaceChildren();
   // The map keeps its aspect ratio inside a height-limited box, so the drawn scale is the larger ratio.
-  const box = svg.getBoundingClientRect();
-  const scale = Math.max(SNAPSHOT.viewBox[2] / Math.max(box.width, 1), SNAPSHOT.viewBox[3] / Math.max(box.height, 1));
+  const svgBox = svg.getBoundingClientRect();
+  const scale = Math.max(SNAPSHOT.viewBox[2] / Math.max(svgBox.width, 1), SNAPSHOT.viewBox[3] / Math.max(svgBox.height, 1));
   const size = MAP_LABEL_SIZE_PX * scale;
   const gap = LABEL_GAP_PX * scale;
   const view = svg.viewBox.baseVal;
-  const sides = [
-    { dx: 1, dy: 0, anchor: "start" }, { dx: -1, dy: 0, anchor: "end" },
-    { dx: 0, dy: -1, anchor: "middle" }, { dx: 0, dy: 1, anchor: "middle" },
-  ];
   /** @type {(DOMRect | SVGRect)[]} */
   const taken = [];
   for (const region of labelledRegions()) {
-    const [lx, ly] = region.labelAt;
     const text = document.createElementNS(SVG_NS, "text");
     text.setAttribute("font-size", size.toFixed(2));
     text.setAttribute("stroke-width", (3 * scale).toFixed(2));
@@ -501,16 +531,9 @@ function renderMapLabels() {
     value.textContent = ` ${Math.round(at(region.forecast, state.cursor))} g`;
     text.append(name, value);
     layer.append(text);
-    const side = sides.find((candidate) => {
-      text.setAttribute("x", (lx + candidate.dx * gap).toFixed(2));
-      text.setAttribute("y", (ly + candidate.dy * gap + (candidate.dy === 0 ? size * 0.35 : candidate.dy > 0 ? size : 0)).toFixed(2));
-      text.setAttribute("text-anchor", candidate.anchor);
-      const box = text.getBBox();
-      const inside = box.x >= view.x && box.y >= view.y && box.x + box.width <= view.x + view.width && box.y + box.height <= view.y + view.height;
-      return inside && !taken.some((other) => overlaps(box, other));
-    });
-    if (side === undefined) text.remove();
-    else taken.push(text.getBBox());
+    const placed = placeLabel(text, region.labelAt, gap, size, view, taken);
+    if (placed === null) text.remove();
+    else taken.push(placed);
   }
 }
 
@@ -533,12 +556,10 @@ function renderList() {
     const bracket = choice.timingMatters ? `<rect x="${choice.cleanest.start}" width="${slots}" height="1" fill="none" stroke="currentColor" stroke-width="2" vector-effect="non-scaling-stroke"/>` : "";
     const when = choice.timingMatters
       ? `${capitalise(slotPhrase(choice.cleanest.start))}, ${grams(choice.cleanest.mean)}`
-      : Math.round(choice.cleanest.mean) === Math.round(choice.dirtiest.mean)
-        ? `Any time, ${grams(choice.cleanest.mean)}`
-        : `Any time, ${Math.round(choice.cleanest.mean)} to ${grams(choice.dirtiest.mean)}`;
+      : `Any time, ${spreadPhrase(choice)}`;
     return `<li><button class="region-row" type="button" data-region="${region.id}" aria-pressed="${selected !== null && selected.id === region.id}">
       <span class="region-row__name">${region.name}</span><span class="region-row__when">${when}</span>
-      <svg class="region-row__strip" viewBox="0 0 ${SNAPSHOT.slotCount} 1" preserveAspectRatio="none" aria-hidden="true">${cells}${bracket}</svg>
+      <svg class="region-row__strip" viewBox="0 0 ${SLOT_COUNT} 1" preserveAspectRatio="none" aria-hidden="true">${cells}${bracket}</svg>
     </button></li>`;
   }).join("");
 }
@@ -577,24 +598,34 @@ async function lookUpPostcode(event) {
   const nonGb = NON_GB_PREFIXES.get(outward.slice(0, 2));
   if (nonGb !== undefined) return showPostcodeMessage(nonGb);
 
+  state.postcodeLookup?.abort();
+  const lookup = new AbortController();
+  state.postcodeLookup = lookup;
   showPostcodeMessage("");
   const busy = setTimeout(() => {
     button.setAttribute("aria-busy", "true");
     button.textContent = "Finding…";
   }, BUSY_DELAY_MS);
+  /** @type {number | null} */
+  let regionId = null;
   try {
-    const response = await fetch(`${POSTCODE_API}${encodeURIComponent(outward)}`, { signal: AbortSignal.timeout(POSTCODE_TIMEOUT_MS) });
+    const signal = AbortSignal.any([lookup.signal, AbortSignal.timeout(POSTCODE_TIMEOUT_MS)]);
+    const response = await fetch(`${POSTCODE_API}${encodeURIComponent(outward)}`, { signal });
     if (!response.ok) throw new Error(`postcode lookup returned HTTP ${response.status}`);
-    selectRegion(regionIdFromLookup(await response.json()));
+    regionId = regionIdFromLookup(await response.json());
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     // NESO's error responses carry no CORS header, so the browser cannot tell an unknown postcode from a network failure.
-    showPostcodeMessage(`NESO's lookup didn't find ${outward}, or couldn't be reached. Check the postcode, or pick your region on the map.`);
+    if (!lookup.signal.aborted) showPostcodeMessage(`NESO's lookup didn't find ${outward}, or couldn't be reached. Check the postcode, or pick your region on the map.`);
   } finally {
     clearTimeout(busy);
-    button.removeAttribute("aria-busy");
-    button.textContent = "Find region";
+    if (state.postcodeLookup === lookup) {
+      state.postcodeLookup = null;
+      button.removeAttribute("aria-busy");
+      button.textContent = "Find region";
+    }
   }
+  if (regionId !== null && !lookup.signal.aborted) selectRegion(regionId);
 }
 
 // Accuracy
@@ -606,7 +637,7 @@ function renderAccuracy() {
   byId("pilot-figures").innerHTML = `
     <div><dt>${pilot.mae.toFixed(1)} g</dt><dd>Average error per kWh over ${pilot.n.toLocaleString("en-GB")} half hours. The 95% interval is ${pilot.maeLow.toFixed(1)} to ${pilot.maeHigh.toFixed(1)} g.</dd></div>
     <div><dt>Under ${Math.round(pilot.p95AbsoluteError)} g</dt><dd>The error in 95 of every 100 half hours.</dd></div>
-    <div><dt>${within} in 100 days</dt><dd>The forecast's cleanest ${pilot.windowHours === 3 ? "three hours" : `${pilot.windowHours} hours`} came within ${Math.round(pilot.regretThreshold * 100)}% of the day's actual best. It picked exactly the best ones on ${exact} days in 100.</dd></div>`;
+    <div><dt>${within} in 100 days</dt><dd>The forecast's cleanest ${HOURS_NOUN.get(pilot.windowHours) ?? `${pilot.windowHours} hours`} came within ${Math.round(pilot.regretThreshold * 100)}% of the day's actual best. It picked exactly the best ones on ${exact} days in 100.</dd></div>`;
   renderHourChart();
 }
 
@@ -615,7 +646,7 @@ function renderHourChart() {
   const width = 760;
   const height = 220;
   const margin = { left: 30, right: 8, top: 12, bottom: 28 };
-  const top = Math.ceil(Math.max(...values) / 5) * 5;
+  const top = Math.max(5, Math.ceil(Math.max(...values) / 5) * 5);
   const band = (width - margin.left - margin.right) / values.length;
   const y = (/** @type {number} */ v) => margin.top + (1 - v / top) * (height - margin.top - margin.bottom);
   const parts = [];
@@ -636,34 +667,36 @@ function renderHourChart() {
 function renderAlertOptions() {
   const select = /** @type {HTMLSelectElement} */ (byId("alert-region"));
   select.innerHTML = SNAPSHOT.regions.map((region) => `<option value="${region.id}">${region.name}</option>`).join("");
-  select.value = String(state.regionId ?? 13);
+  select.value = String(state.regionId ?? DEFAULT_REGION_ID);
   byId("alert-length").innerHTML = SNAPSHOT.durationsHours.map((hours) => `<input type="radio" name="alert-hours" id="alert-hours-${hours}" value="${hours}"${hours === state.hours ? " checked" : ""}><label for="alert-hours-${hours}">${hours} h</label>`).join("");
 }
 
 function alertSettings() {
   const form = /** @type {HTMLFormElement} */ (byId("alerts-form"));
-  const data = new FormData(form);
+  const fields = new FormData(form);
   return {
-    region: regionById(Number(data.get("region"))),
-    hours: Number(data.get("alert-hours")),
-    when: String(data.get("when")),
-    skip: data.get("skip") !== null,
+    region: regionById(Number(fields.get("region"))),
+    hours: Number(fields.get("alert-hours")),
+    when: String(fields.get("when")),
+    skip: fields.get("skip") !== null,
   };
 }
 
-function renderAlertPreview() {
+/** The notification text for these alert settings, or why none would be sent. */
+function alertText() {
   const { region, hours, when, skip } = alertSettings();
   const choice = windowChoice(region, hours);
-  const noun = HOURS_NOUN.get(hours) ?? "";
+  if (skip && !choice.timingMatters) return `No alert for now: timing makes little difference in ${region.name} over the next two days.`;
+  const subject = `Your cleanest ${HOURS_NOUN.get(hours) ?? ""} in ${region.name}`;
   const start = slotStartMs(choice.cleanest.start);
   const end = slotStartMs(choice.cleanest.start + slotsFor(hours));
-  let text = choice.cleanest.start === 0
-    ? `Your cleanest ${noun} in ${region.name} start now and run until ${clock(end)}, at about ${Math.round(choice.cleanest.mean)} g of CO₂ per kWh.`
-    : `Your cleanest ${noun} in ${region.name} start at ${clock(start)} ${dayWord(start)}, at about ${Math.round(choice.cleanest.mean)} g of CO₂ per kWh.`;
-  if (when === "hour") text = `Your cleanest ${noun} in ${region.name} start in one hour, at ${clock(start)}.`;
-  if (when === "start") text = `Your cleanest ${noun} in ${region.name} start now and run until ${clock(end)}.`;
-  if (skip && !choice.timingMatters) text = `No alert for now: timing makes little difference in ${region.name} over the next two days.`;
-  byId("alert-preview").textContent = text;
+  if (when === "start" || choice.cleanest.start === 0) return `${subject} ${agree(hours, "start")} now and ${agree(hours, "run")} until ${clock(end)}.`;
+  if (when === "hour") return `${subject} ${agree(hours, "start")} in one hour, at ${clock(start)}.`;
+  return `${subject} ${agree(hours, "start")} at ${clock(start)} ${dayWord(start)}, at about ${Math.round(choice.cleanest.mean)} g of CO₂ per kWh.`;
+}
+
+function renderAlertPreview() {
+  byId("alert-preview").textContent = alertText();
 }
 
 /** @param {SubmitEvent} event */
@@ -686,17 +719,19 @@ function turnOffAlerts() {
 // Ask
 
 function renderAsk() {
-  const region = regionById(11);
-  const hours = 4;
-  const choice = windowChoice(region, hours);
+  const region = regionById(ASK_REGION_ID);
+  const noun = HOURS_NOUN.get(ASK_HOURS) ?? "";
+  const choice = windowChoice(region, ASK_HOURS);
   const now = at(region.forecast, 0);
   const cut = Math.round((1 - choice.cleanest.mean / Math.max(now, 1)) * 100);
   const start = slotStartMs(choice.cleanest.start);
-  byId("ask-lookup").innerHTML = `Looked up <code>cleanest_window</code> for ${region.name}, which covers Bristol: four hours, forecast fetched ${clock(FETCHED_MS)} ${dayWord(FETCHED_MS)}.`;
+  const end = slotStartMs(choice.cleanest.start + slotsFor(ASK_HOURS));
+  const when = choice.cleanest.start === 0 ? `start now and run until ${clock(end)}` : `start ${dayWord(start)} at ${clock(start)} and run until ${clock(end)}`;
+  byId("ask-lookup").innerHTML = `Looked up <code>cleanest_window</code> for ${region.name}, which covers Bristol: ${noun}, forecast fetched ${clock(FETCHED_MS)} ${dayWord(FETCHED_MS)}.`;
   const comparison = cut > 0
     ? `Right now the grid there is at ${Math.round(now)} g, so electricity in that window is about ${cut}% less carbon-intensive.`
     : `That is about the same as right now, ${Math.round(now)} g, so there is no need to wait.`;
-  byId("ask-answer").textContent = `The cleanest four hours for charging in ${region.name} start ${dayWord(start)} at ${clock(start)} and run until ${clock(start + hours * 3_600_000)}, at about ${Math.round(choice.cleanest.mean)} g of CO₂ per kWh. ${comparison}`;
+  byId("ask-answer").textContent = `The cleanest ${noun} for charging in ${region.name} ${when}, at about ${Math.round(choice.cleanest.mean)} g of CO₂ per kWh. ${comparison}`;
 }
 
 // Playback
@@ -709,10 +744,10 @@ function stopPlaying() {
 
 function togglePlaying() {
   if (state.playTimer !== null) return stopPlaying();
-  if (state.cursor >= SNAPSHOT.slotCount - 1) setCursor(0);
+  if (state.cursor >= SLOT_COUNT - 1) setCursor(0);
   byId("play").textContent = "Pause";
   state.playTimer = window.setInterval(() => {
-    if (state.cursor >= SNAPSHOT.slotCount - 1) return stopPlaying();
+    if (state.cursor >= SLOT_COUNT - 1) return stopPlaying();
     setCursor(state.cursor + 1);
   }, PLAY_STEP_MS);
 }
@@ -762,6 +797,7 @@ function selectRegion(id) {
 }
 
 function wire() {
+  // lookUpPostcode reports its own failures to the user; anything it rethrows is a bug, left to surface as an unhandled rejection.
   byId("postcode-form").addEventListener("submit", (event) => void lookUpPostcode(/** @type {SubmitEvent} */ (event)));
   byId("length-options").addEventListener("change", (event) => {
     if (!(event.target instanceof HTMLInputElement)) return;
@@ -791,18 +827,18 @@ function wire() {
     const step = steps.get(event.key);
     let next = step === undefined ? null : state.cursor + step;
     if (event.key === "Home") next = 0;
-    if (event.key === "End") next = SNAPSHOT.slotCount - 1;
+    if (event.key === "End") next = SLOT_COUNT - 1;
     if (next === null) return;
     event.preventDefault();
     stopPlaying();
-    setCursor(Math.min(Math.max(next, 0), SNAPSHOT.slotCount - 1));
+    setCursor(Math.min(Math.max(next, 0), SLOT_COUNT - 1));
   });
   byId("play").addEventListener("click", togglePlaying);
 
   const mockSelect = /** @type {HTMLSelectElement} */ (byId("mockup-state"));
   mockSelect.addEventListener("change", () => {
     state.mockState = MOCK_STATES.find((candidate) => candidate === mockSelect.value) ?? "live";
-    if (state.mockState !== "first" && state.regionId === null) state.regionId = 13;
+    if (state.mockState !== "first" && state.regionId === null) state.regionId = DEFAULT_REGION_ID;
     stopPlaying();
     writeUrl();
     renderAll();
@@ -819,6 +855,7 @@ function wire() {
   byId("alerts-off").addEventListener("click", turnOffAlerts);
 
   window.addEventListener("hashchange", () => {
+    stopPlaying();
     readUrl();
     mockSelect.value = state.mockState;
     renderAll();
