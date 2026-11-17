@@ -151,6 +151,58 @@ def test_rejects_boolean_percentage() -> None:
     _rejects(data, "expected a number")
 
 
+def _with_mix(position: int, **changes: Any) -> dict[str, Any]:
+    data = payload(2)
+    data["data"][1]["regions"][4]["generationmix"][position].update(changes)
+    return data
+
+
+def test_rejects_duplicated_fuel_naming_slot_region_and_fuel() -> None:
+    _rejects(_with_mix(1, fuel="biomass"), r"slot 1 \(2026-11-17T12:00Z\) region 5.*biomass.*twice")
+
+
+def test_rejects_unknown_fuel_naming_slot_region_and_fuel() -> None:
+    _rejects(_with_mix(1, fuel="fusion"), r"slot 1 \(2026-11-17T12:00Z\) region 5.*'fusion'")
+
+
+@pytest.mark.parametrize("value", [-0.1, 100.1, float("nan"), float("inf")])
+def test_rejects_percentage_outside_zero_to_one_hundred(value: float) -> None:
+    _rejects(
+        _with_mix(2, perc=value),
+        rf"slot 1 \(2026-11-17T12:00Z\) region 5 imports.*0 to 100, got {value}",
+    )
+
+
+@pytest.mark.parametrize("value", [0, 0.0, 100, 100.0])
+def test_accepts_percentage_at_the_limits(value: float) -> None:
+    assert parse_forecast(_with_mix(2, perc=value)).series[5].mix[1][2] == value
+
+
+def test_names_slot_and_position_when_a_slot_time_is_malformed() -> None:
+    data = payload(2)
+    data["data"][1]["from"] = "17 Nov"
+    _rejects(data, r"slot 1.*17 Nov")
+
+
+@pytest.mark.parametrize("minute", [1, 15, 29, 59])
+def test_rejects_first_slot_that_is_off_the_half_hour(minute: int) -> None:
+    data = payload(1)
+    data["data"][0]["from"] = f"2026-11-17T11:{minute:02d}Z"
+    _rejects(data, rf"slot 0.*on the hour or half hour.*11:{minute:02d}Z")
+
+
+def test_accepts_first_slot_on_the_hour() -> None:
+    data = payload(1)
+    data["data"][0]["from"] = "2026-11-17T11:00Z"
+    assert parse_forecast(data).slot_starts[0].minute == 0
+
+
+def test_error_inside_a_slot_names_its_time_and_region() -> None:
+    data = payload(2)
+    data["data"][1]["regions"][2]["intensity"]["forecast"] = -3
+    _rejects(data, r"slot 1 \(2026-11-17T12:00Z\) region 3: expected a non-negative")
+
+
 def test_shortens_overlong_offending_value() -> None:
     _rejects({"data": "x" * 500}, r"'x+\.\.\.")
 

@@ -73,7 +73,6 @@ def build_snapshot(
         "fetchedAt": format_slot_time(fetched_at),
         "firstSlotStart": format_slot_time(first_start),
         "slotMinutes": SLOT_MINUTES,
-        "slotCount": len(forecast.slot_starts),
         "fuels": list(FUELS),
         "viewBox": list(geometry.view_box),
         "shetlandFrame": list(geometry.shetland_frame),
@@ -121,13 +120,22 @@ def _read_json(path: Path) -> Any:  # the caller validates the parsed document
         raw = handle.read(MAX_INPUT_BYTES + 1)
     if len(raw) > MAX_INPUT_BYTES:
         raise ValueError(f"{path} is larger than {MAX_INPUT_BYTES} bytes")
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except RecursionError as err:
+        raise ValueError(f"{path} is nested too deeply to parse") from err
 
 
 def _region_entry(
     region: Region, forecast: RegionalForecast, geometry: MapGeometry, fetched_at: datetime
 ) -> dict[str, Any]:
     series = forecast.series[region.api_id]
+    longest_slots = max(DURATIONS_HOURS) * _SLOTS_PER_HOUR
+    if len(series.forecast) < longest_slots:
+        raise ValueError(
+            f"region {region.name}: forecast has {len(series.forecast)} slots, "
+            f"fewer than the {longest_slots} slots ({max(DURATIONS_HOURS)}-hour window) needed"
+        )
     shape = geometry.regions[region.boundary_area]
     low, high = illustrative_range(series.forecast, forecast.slot_starts, fetched_at)
     return {
@@ -144,6 +152,8 @@ def _region_entry(
 
 
 def _windows_for(values: Sequence[int], hours: int) -> dict[str, Any]:
+    # Slot 0 is searched although it began before the fetch: the current half hour is still
+    # usable, and the page calls a window that starts there "now".
     cleanest = cleanest_window(values, hours * _SLOTS_PER_HOUR)
     dirtiest = dirtiest_window(values, hours * _SLOTS_PER_HOUR)
     return {
@@ -154,29 +164,47 @@ def _windows_for(values: Sequence[int], hours: int) -> dict[str, Any]:
 
 
 def _pilot_summary(pilot: Any) -> dict[str, Any]:
-    try:
-        errors = pilot["errors"]
-        window = pilot["window_pilot"]
-        return {
-            "n": errors["n"],
-            "mae": _rounded(errors["mae"]),
-            "maeLow": _rounded(errors["mae_ci95_low"]),
-            "maeHigh": _rounded(errors["mae_ci95_high"]),
-            "p95AbsoluteError": _rounded(errors["p95_absolute_error"]),
-            "meanBias": _rounded(errors["mean_bias"]),
-            "mapePercent": _rounded(errors["mape_percent"]),
-            "maeByHourUtc": [_rounded(pilot["mae_by_hour_utc"][str(hour)]) for hour in range(24)],
-            "windowHours": window["window_hours"],
-            "regretThreshold": window["regret_threshold"],
-            "daysAnalysed": window["days_analysed"],
-            "shareWithinThreshold": _rounded(window["share_regret_at_most_threshold"]),
-            "shareExactBest": _rounded(window["share_windows_coincide"]),
-            "medianRegret": _rounded(window["median_regret"]),
-            "caveat": pilot["caveat"],
-        }
-    except (KeyError, TypeError) as err:
-        raise ValueError(f"pilot file is malformed: {err!r}") from err
+    count = _pilot_field(pilot, "errors", "n")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+        raise ValueError(f"pilot file: errors.n expected a positive integer, got {count!r:.80}")
+    threshold = _pilot_number(pilot, "window_pilot", "regret_threshold")
+    if not 0 <= threshold <= 1:
+        raise ValueError(
+            f"pilot file: window_pilot.regret_threshold expected 0 to 1, got {threshold}"
+        )
+    return {
+        "n": count,
+        "mae": _pilot_rounded(pilot, "errors", "mae"),
+        "maeLow": _pilot_rounded(pilot, "errors", "mae_ci95_low"),
+        "maeHigh": _pilot_rounded(pilot, "errors", "mae_ci95_high"),
+        "p95AbsoluteError": _pilot_rounded(pilot, "errors", "p95_absolute_error"),
+        "maeByHourUtc": [_pilot_rounded(pilot, "mae_by_hour_utc", str(hour)) for hour in range(24)],
+        "windowHours": _pilot_number(pilot, "window_pilot", "window_hours"),
+        "regretThreshold": threshold,
+        "shareWithinThreshold": _pilot_rounded(
+            pilot, "window_pilot", "share_regret_at_most_threshold"
+        ),
+        "shareExactBest": _pilot_rounded(pilot, "window_pilot", "share_windows_coincide"),
+    }
 
 
-def _rounded(value: float) -> float:
-    return round(value, _PILOT_DECIMAL_PLACES)
+def _pilot_field(pilot: Any, *path: str) -> Any:
+    value = pilot
+    for key in path:
+        if not isinstance(value, dict) or key not in value:
+            raise ValueError(f"pilot file: missing field {'.'.join(path)}")
+        value = value[key]
+    return value
+
+
+def _pilot_number(pilot: Any, *path: str) -> float:
+    value = _pilot_field(pilot, *path)
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        raise ValueError(
+            f"pilot file: {'.'.join(path)} expected a finite number, got {value!r:.80}"
+        )
+    return value
+
+
+def _pilot_rounded(pilot: Any, *path: str) -> float:
+    return round(_pilot_number(pilot, *path), _PILOT_DECIMAL_PLACES)

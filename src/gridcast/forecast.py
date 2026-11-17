@@ -2,11 +2,13 @@
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from gridcast.regions import REGIONS
 
 FUELS = ("biomass", "coal", "imports", "gas", "nuclear", "other", "hydro", "solar", "wind")
-INDEX_LEVELS = ("very low", "low", "moderate", "high", "very high")
+IndexLevel = Literal["very low", "low", "moderate", "high", "very high"]
+INDEX_LEVELS: tuple[IndexLevel, ...] = ("very low", "low", "moderate", "high", "very high")
 SLOT_MINUTES = 30
 TIME_FORMAT = "%Y-%m-%dT%H:%MZ"
 
@@ -14,6 +16,7 @@ _SLOT = timedelta(minutes=SLOT_MINUTES)
 # The API also returns England, Scotland, Wales and GB aggregates under other ids.
 _REGION_IDS = frozenset(region.api_id for region in REGIONS)
 _MAX_SHOWN_CHARS = 80
+_MAX_PERCENTAGE = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,7 +24,7 @@ class RegionSeries:
     """One region across all slots; `mix` holds percentages in FUELS order."""
 
     forecast: tuple[int, ...]
-    index: tuple[str, ...]
+    index: tuple[IndexLevel, ...]
     mix: tuple[tuple[float, ...], ...]
 
 
@@ -52,17 +55,12 @@ def parse_forecast(payload: object) -> RegionalForecast:
         raise ValueError("data holds no slots")
     starts: list[datetime] = []
     forecast: dict[int, list[int]] = {region_id: [] for region_id in _REGION_IDS}
-    index: dict[int, list[str]] = {region_id: [] for region_id in _REGION_IDS}
+    index: dict[int, list[IndexLevel]] = {region_id: [] for region_id in _REGION_IDS}
     mix: dict[int, list[tuple[float, ...]]] = {region_id: [] for region_id in _REGION_IDS}
     for position, slot in enumerate(slots):
-        where = f"slot {position}"
-        start = parse_slot_time(_member(slot, "from", where))
-        if starts and start != starts[-1] + _SLOT:
-            raise ValueError(
-                f"{where}: expected start {format_slot_time(starts[-1] + _SLOT)}, "
-                f"got {format_slot_time(start)}"
-            )
+        start = _slot_start(slot, position, starts[-1] if starts else None)
         starts.append(start)
+        where = f"slot {position} ({format_slot_time(start)})"
         for region_id, entry in _regions_of(slot, where).items():
             where_region = f"{where} region {region_id}"
             intensity = _member(entry, "intensity", where_region)
@@ -76,6 +74,27 @@ def parse_forecast(payload: object) -> RegionalForecast:
         for region_id in sorted(_REGION_IDS)
     }
     return RegionalForecast(slot_starts=tuple(starts), series=series)
+
+
+def _slot_start(slot: object, position: int, previous: datetime | None) -> datetime:
+    where = f"slot {position}"
+    raw_start = _member(slot, "from", where)
+    try:
+        start = parse_slot_time(raw_start)
+    except ValueError as err:
+        raise ValueError(f"{where} from: {err}") from err
+    if previous is None:
+        if start.minute % SLOT_MINUTES != 0:
+            raise ValueError(
+                f"{where}: expected a first start on the hour or half hour, "
+                f"got {format_slot_time(start)}"
+            )
+    elif start != previous + _SLOT:
+        raise ValueError(
+            f"{where}: expected start {format_slot_time(previous + _SLOT)}, "
+            f"got {format_slot_time(start)}"
+        )
+    return start
 
 
 def _shown(value: object) -> str:
@@ -132,20 +151,31 @@ def _forecast_value(intensity: object, where: str) -> int:
     return value
 
 
-def _index_level(intensity: object, where: str) -> str:
+def _index_level(intensity: object, where: str) -> IndexLevel:
     level = _member(intensity, "index", where)
-    if not isinstance(level, str) or level not in INDEX_LEVELS:
-        raise ValueError(f"{where}: expected an index in {INDEX_LEVELS}, got {_shown(level)}")
-    return level
+    for known in INDEX_LEVELS:
+        if level == known:
+            return known
+    raise ValueError(f"{where}: expected an index in {INDEX_LEVELS}, got {_shown(level)}")
 
 
 def _mix_of(entry: object, where: str) -> tuple[float, ...]:
     items = _as_list(_member(entry, "generationmix", where), f"{where} generationmix")
-    pairs = [(_member(item, "fuel", where), _member(item, "perc", where)) for item in items]
-    percentages: list[float] = []
+    percentages: dict[str, float] = {}
+    for item in items:
+        fuel = _member(item, "fuel", where)
+        if not isinstance(fuel, str) or fuel not in FUELS:
+            raise ValueError(f"{where}: expected a fuel in {FUELS}, got {_shown(fuel)}")
+        if fuel in percentages:
+            raise ValueError(f"{where}: generationmix lists fuel {fuel!r} twice")
+        percentage = _as_number(_member(item, "perc", where), f"{where} {fuel}")
+        if not 0 <= percentage <= _MAX_PERCENTAGE:
+            raise ValueError(
+                f"{where} {fuel}: expected a percentage from 0 to {_MAX_PERCENTAGE}, "
+                f"got {percentage}"
+            )
+        percentages[fuel] = percentage
     for fuel in FUELS:
-        matches = [perc for name, perc in pairs if name == fuel]
-        if not matches:
+        if fuel not in percentages:
             raise ValueError(f"{where}: generationmix is missing fuel {fuel!r}")
-        percentages.append(_as_number(matches[0], f"{where} {fuel}"))
-    return tuple(percentages)
+    return tuple(percentages[fuel] for fuel in FUELS)

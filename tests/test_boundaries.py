@@ -1,6 +1,7 @@
-from typing import Any
+from copy import deepcopy
 
 import pytest
+from factories import KM, all_areas, boundary_collection, shetland_like, square
 
 from gridcast.boundaries import (
     MIN_RING_AREA_M2,
@@ -11,43 +12,6 @@ from gridcast.boundaries import (
     simplify_line,
     simplify_ring,
 )
-from gridcast.regions import REGIONS
-
-KM = 1000.0
-
-
-def _square(west: float, south: float, side_m: float) -> list[list[float]]:
-    east, north = west + side_m, south + side_m
-    return [[west, south], [east, south], [east, north], [west, north], [west, south]]
-
-
-def _collection(
-    placements: dict[str, list[list[list[float]]]], crs: str = "urn:ogc:def:crs:EPSG::27700"
-) -> dict[str, Any]:
-    """One MultiPolygon feature per area, each holding the given exterior rings."""
-    return {
-        "type": "FeatureCollection",
-        "crs": {"type": "name", "properties": {"name": crs}},
-        "features": [
-            {
-                "type": "Feature",
-                "properties": {"Area": area},
-                "geometry": {"type": "MultiPolygon", "coordinates": [[ring] for ring in rings]},
-            }
-            for area, rings in placements.items()
-        ],
-    }
-
-
-def _all_areas(**extra: list[list[list[float]]]) -> dict[str, list[list[list[float]]]]:
-    """Every area as a 40 km square on a diagonal, plus any extra rings for named areas."""
-    placements = {
-        region.boundary_area: [_square(50_000 * region.api_id, 50_000 * region.api_id, 40 * KM)]
-        for region in REGIONS
-    }
-    for area, rings in extra.items():
-        placements[area.replace("_", " ")] += rings
-    return placements
 
 
 def test_simplify_line_keeps_end_points_and_drops_collinear_points() -> None:
@@ -85,7 +49,7 @@ def test_simplify_ring_leaves_a_tiny_ring_alone() -> None:
 
 def test_rejects_other_coordinate_reference_system() -> None:
     with pytest.raises(ValueError, match="EPSG::4326"):
-        build_map(_collection(_all_areas(), crs="urn:ogc:def:crs:EPSG::4326"))
+        build_map(boundary_collection(all_areas(), crs="urn:ogc:def:crs:EPSG::4326"))
 
 
 def test_rejects_malformed_file() -> None:
@@ -94,54 +58,84 @@ def test_rejects_malformed_file() -> None:
 
 
 def test_rejects_unsupported_geometry() -> None:
-    data = _collection(_all_areas())
+    data = boundary_collection(all_areas())
     data["features"][0]["geometry"] = {"type": "Point", "coordinates": [0, 0]}
     with pytest.raises(ValueError, match="got 'Point'"):
         build_map(data)
 
 
 def test_rejects_missing_area() -> None:
-    data = _collection(_all_areas())
+    data = boundary_collection(all_areas())
     data["features"].pop()
     with pytest.raises(ValueError, match="no boundary found"):
         build_map(data)
 
 
+def test_rejects_area_that_is_not_a_region() -> None:
+    data = boundary_collection(all_areas(**{"North_Scotland": [shetland_like()]}))
+    data["features"].append(deepcopy(data["features"][0]))
+    data["features"][-1]["properties"]["Area"] = "Atlantis"
+    with pytest.raises(ValueError, match=r"unexpected areas .*Atlantis"):
+        build_map(data)
+
+
+def test_rejects_area_whose_islands_are_all_too_small() -> None:
+    placements = all_areas(**{"North_Scotland": [shetland_like()]})
+    placements["London"] = [square(10_000.0, 10_000.0, (MIN_RING_AREA_M2**0.5) * 0.9)]
+    with pytest.raises(ValueError, match=r"no boundary found for areas \['London'\]"):
+        build_map(boundary_collection(placements))
+
+
+def test_rejects_unreadable_coordinate_naming_the_feature() -> None:
+    data = boundary_collection(all_areas(**{"North_Scotland": [shetland_like()]}))
+    data["features"][2]["geometry"]["coordinates"][0][0][1] = ["x", 5]
+    with pytest.raises(ValueError, match=r"feature 2 \(North West England\)"):
+        build_map(data)
+
+
+def test_rejects_missing_coordinates_naming_the_feature() -> None:
+    data = boundary_collection(all_areas(**{"North_Scotland": [shetland_like()]}))
+    data["features"][3]["geometry"]["coordinates"][0] = []
+    with pytest.raises(ValueError, match=r"feature 3 \(North East England\)"):
+        build_map(data)
+
+
+def test_accepts_polygon_geometry_like_a_single_part_multipolygon() -> None:
+    data = boundary_collection(all_areas(**{"North_Scotland": [shetland_like()]}))
+    expected = build_map(data)
+    feature = data["features"][12]
+    assert feature["properties"]["Area"] == "London"
+    feature["geometry"] = {"type": "Polygon", "coordinates": feature["geometry"]["coordinates"][0]}
+    assert build_map(data) == expected
+
+
 def test_rejects_file_without_shetland() -> None:
     with pytest.raises(ValueError, match="no polygon lies above northing"):
-        build_map(_collection(_all_areas()))
-
-
-def _shetland_like(west: float = 450_000.0) -> list[list[float]]:
-    return _square(west, 1_150_000.0, 30 * KM)
+        build_map(boundary_collection(all_areas()))
 
 
 def test_drops_islands_below_the_minimum_area() -> None:
     small_side = (MIN_RING_AREA_M2**0.5) * 0.9
-    tiny = _square(10_000.0, 10_000.0, small_side)
-    kept_alone = build_map(_collection(_all_areas(Yorkshire=[_shetland_like()])), tolerance_m=100.0)
-    with_island = build_map(
-        _collection(_all_areas(Yorkshire=[_shetland_like(), tiny])), tolerance_m=100.0
-    )
+    tiny = square(10_000.0, 10_000.0, small_side)
+    kept_alone = build_map(boundary_collection(all_areas(Yorkshire=[shetland_like()])))
+    with_island = build_map(boundary_collection(all_areas(Yorkshire=[shetland_like(), tiny])))
     assert with_island.regions["Yorkshire"] == kept_alone.regions["Yorkshire"]
     assert with_island.view_box == kept_alone.view_box
 
 
 def test_keeps_islands_above_the_minimum_area() -> None:
     big_side = (MIN_RING_AREA_M2**0.5) * 1.1
-    island = _square(10_000.0, 10_000.0, big_side)
-    base = build_map(_collection(_all_areas(Yorkshire=[_shetland_like()])), tolerance_m=100.0)
-    bigger = build_map(
-        _collection(_all_areas(Yorkshire=[_shetland_like(), island])), tolerance_m=100.0
-    )
+    island = square(10_000.0, 10_000.0, big_side)
+    base = build_map(boundary_collection(all_areas(Yorkshire=[shetland_like()])))
+    bigger = build_map(boundary_collection(all_areas(Yorkshire=[shetland_like(), island])))
     assert (
         bigger.regions["Yorkshire"].path.count("M") == base.regions["Yorkshire"].path.count("M") + 1
     )
 
 
 def test_shifts_shetland_and_frames_it() -> None:
-    data = _collection(_all_areas(**{"North_Scotland": [_shetland_like()]}))
-    geometry = build_map(data, tolerance_m=100.0)
+    data = boundary_collection(all_areas(**{"North_Scotland": [shetland_like()]}))
+    geometry = build_map(data)
     pad_units = SHETLAND_FRAME_PADDING_M / KM
     left, top, width, height = geometry.shetland_frame
     assert width == pytest.approx(30 + 2 * pad_units, abs=0.2)
@@ -157,8 +151,8 @@ def test_shifts_shetland_and_frames_it() -> None:
 
 
 def test_view_box_has_margin_on_every_side() -> None:
-    data = _collection(_all_areas(**{"North_Scotland": [_shetland_like()]}))
-    geometry = build_map(data, tolerance_m=100.0)
+    data = boundary_collection(all_areas(**{"North_Scotland": [shetland_like()]}))
+    geometry = build_map(data)
     xs: list[float] = []
     ys: list[float] = []
     for shape in geometry.regions.values():
@@ -176,8 +170,8 @@ def test_view_box_has_margin_on_every_side() -> None:
 
 
 def test_path_is_closed_move_line_form() -> None:
-    data = _collection(_all_areas(**{"North_Scotland": [_shetland_like()]}))
-    path = build_map(data, tolerance_m=100.0).regions["London"].path
+    data = boundary_collection(all_areas(**{"North_Scotland": [shetland_like()]}))
+    path = build_map(data).regions["London"].path
     assert path.startswith("M ")
     assert path.endswith(" Z")
     assert path.count("M") == 1
@@ -208,4 +202,9 @@ def test_label_point_avoids_a_hole() -> None:
     hole = [(1.0, 4.0), (9.0, 4.0), (9.0, 6.0), (1.0, 6.0), (1.0, 4.0)]
     x, y = label_point([outer, hole])
     assert not (1.0 < x < 9.0 and 4.0 < y < 6.0)
-    assert ring_area(outer) == 100.0
+
+
+def test_ring_area_is_absolute_whichever_way_the_ring_runs() -> None:
+    anticlockwise = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]
+    assert ring_area(anticlockwise) == 100.0
+    assert ring_area(anticlockwise[::-1]) == 100.0

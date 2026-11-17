@@ -4,10 +4,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from factories import payload
+from factories import all_areas, boundary_collection, payload, shetland_like
 
 from gridcast import snapshot
-from gridcast.regions import REGIONS
 from gridcast.snapshot import illustrative_range, main
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -15,31 +14,8 @@ PREFIX = "window.GRIDCAST_SNAPSHOT = "
 FETCHED_AT = "2026-11-17T11:50Z"
 
 
-def _square(west: float, south: float, side_m: float) -> list[list[float]]:
-    east, north = west + side_m, south + side_m
-    return [[west, south], [east, south], [east, north], [west, north], [west, south]]
-
-
 def _boundaries() -> dict[str, Any]:
-    areas = {
-        region.boundary_area: _square(50_000 * region.api_id, 50_000, 40_000) for region in REGIONS
-    }
-    # A polygon wholly above the Shetland threshold, added to the first area.
-    shetland = _square(450_000, 1_150_000, 30_000)
-    features = [
-        {
-            "properties": {"Area": area},
-            "geometry": {
-                "type": "MultiPolygon",
-                "coordinates": [[ring], [shetland]] if area == "North Scotland" else [[ring]],
-            },
-        }
-        for area, ring in areas.items()
-    ]
-    return {
-        "crs": {"properties": {"name": "urn:ogc:def:crs:EPSG::27700"}},
-        "features": features,
-    }
+    return boundary_collection(all_areas(North_Scotland=[shetland_like()]))
 
 
 def _pilot() -> dict[str, Any]:
@@ -108,7 +84,6 @@ def test_writes_snapshot_with_expected_shape(inputs: dict[str, Path]) -> None:
         "fetchedAt",
         "firstSlotStart",
         "slotMinutes",
-        "slotCount",
         "fuels",
         "viewBox",
         "shetlandFrame",
@@ -118,7 +93,6 @@ def test_writes_snapshot_with_expected_shape(inputs: dict[str, Path]) -> None:
     ]
     assert data["fetchedAt"] == FETCHED_AT
     assert data["firstSlotStart"] == "2026-11-17T11:30Z"
-    assert data["slotCount"] == 96
     assert [region["id"] for region in data["regions"]] == list(range(1, 15))
     region = data["regions"][2]
     assert list(region) == [
@@ -140,10 +114,22 @@ def test_writes_snapshot_with_expected_shape(inputs: dict[str, Path]) -> None:
     assert data["pilot"]["mae"] == 9.282
     assert data["pilot"]["maeByHourUtc"][1] == 1.123
     assert data["pilot"]["shareExactBest"] == 0.26
+    assert list(data["pilot"]) == [
+        "n",
+        "mae",
+        "maeLow",
+        "maeHigh",
+        "p95AbsoluteError",
+        "maeByHourUtc",
+        "windowHours",
+        "regretThreshold",
+        "shareWithinThreshold",
+        "shareExactBest",
+    ]
 
 
 def test_output_is_compact_utf8_with_unix_newline(inputs: dict[str, Path]) -> None:
-    _run(inputs)
+    assert _run(inputs) == 0
     raw = inputs["output"].read_bytes()
     assert raw.endswith(b";\n")
     assert b"\r" not in raw
@@ -185,6 +171,119 @@ def test_reports_missing_input_file(inputs: dict[str, Path]) -> None:
 def test_rejects_malformed_pilot(inputs: dict[str, Path]) -> None:
     inputs["pilot"].write_text("{}", encoding="utf-8")
     assert _run(inputs) == 1
+
+
+def _pilot_without(*path: str) -> dict[str, Any]:
+    pilot = _pilot()
+    target = pilot
+    for key in path[:-1]:
+        target = target[key]
+    del target[path[-1]]
+    return pilot
+
+
+def _pilot_with(value: object, *path: str) -> dict[str, Any]:
+    pilot = _pilot()
+    target = pilot
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    return pilot
+
+
+PILOT_NUMBER_FIELDS = [
+    ("errors", "mae"),
+    ("errors", "mae_ci95_low"),
+    ("errors", "mae_ci95_high"),
+    ("errors", "p95_absolute_error"),
+    ("mae_by_hour_utc", "0"),
+    ("mae_by_hour_utc", "23"),
+    ("window_pilot", "window_hours"),
+    ("window_pilot", "regret_threshold"),
+    ("window_pilot", "share_regret_at_most_threshold"),
+    ("window_pilot", "share_windows_coincide"),
+]
+
+
+@pytest.mark.parametrize("path", [("errors", "n"), *PILOT_NUMBER_FIELDS])
+def test_rejects_pilot_field_that_is_missing(
+    inputs: dict[str, Path], capsys: pytest.CaptureFixture[str], path: tuple[str, ...]
+) -> None:
+    inputs["pilot"].write_text(json.dumps(_pilot_without(*path)), encoding="utf-8")
+    assert _run(inputs) == 1
+    assert ".".join(path) in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("path", PILOT_NUMBER_FIELDS)
+@pytest.mark.parametrize("bad", ['"9"', "true", "null", "NaN", "Infinity", "-Infinity"])
+def test_rejects_pilot_number_that_is_not_a_finite_number(
+    inputs: dict[str, Path], capsys: pytest.CaptureFixture[str], path: tuple[str, ...], bad: str
+) -> None:
+    text = json.dumps(_pilot_with("PLACEHOLDER", *path)).replace('"PLACEHOLDER"', bad)
+    inputs["pilot"].write_text(text, encoding="utf-8")
+    assert _run(inputs) == 1
+    assert f"pilot file: {'.'.join(path)}" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("bad", [0, -4, 2.5, True, "10"])
+def test_rejects_pilot_count_that_is_not_a_positive_integer(
+    inputs: dict[str, Path], capsys: pytest.CaptureFixture[str], bad: object
+) -> None:
+    inputs["pilot"].write_text(json.dumps(_pilot_with(bad, "errors", "n")), encoding="utf-8")
+    assert _run(inputs) == 1
+    assert "pilot file: errors.n" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("bad", [-0.01, 1.01])
+def test_rejects_pilot_threshold_outside_zero_to_one(
+    inputs: dict[str, Path], capsys: pytest.CaptureFixture[str], bad: float
+) -> None:
+    pilot = _pilot_with(bad, "window_pilot", "regret_threshold")
+    inputs["pilot"].write_text(json.dumps(pilot), encoding="utf-8")
+    assert _run(inputs) == 1
+    assert "pilot file: window_pilot.regret_threshold" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("threshold", [0, 1])
+def test_accepts_pilot_threshold_at_the_limits(inputs: dict[str, Path], threshold: int) -> None:
+    pilot = _pilot_with(threshold, "window_pilot", "regret_threshold")
+    inputs["pilot"].write_text(json.dumps(pilot), encoding="utf-8")
+    assert _run(inputs) == 0
+
+
+def test_rejects_pilot_that_is_not_an_object(
+    inputs: dict[str, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    inputs["pilot"].write_text("[1]", encoding="utf-8")
+    assert _run(inputs) == 1
+    assert "pilot file" in capsys.readouterr().err
+
+
+def test_rejects_forecast_shorter_than_the_longest_window(
+    inputs: dict[str, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    inputs["forecast"].write_text(json.dumps(payload(7)), encoding="utf-8")
+    assert _run(inputs) == 1
+    error = capsys.readouterr().err
+    assert "region North Scotland" in error
+    assert "4-hour window" in error
+    assert "8 slots" in error
+    assert "7" in error
+
+
+def test_accepts_forecast_exactly_as_long_as_the_longest_window(inputs: dict[str, Path]) -> None:
+    inputs["forecast"].write_text(json.dumps(payload(8)), encoding="utf-8")
+    assert _run(inputs) == 0
+
+
+def test_reports_deeply_nested_input_without_a_traceback(
+    inputs: dict[str, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    inputs["pilot"].write_text("[" * 100_000, encoding="utf-8")
+    assert _run(inputs) == 1
+    error = capsys.readouterr().err
+    assert "nested too deeply" in error
+    assert str(inputs["pilot"]) in error
 
 
 def test_illustrative_range_widens_with_lead_time() -> None:

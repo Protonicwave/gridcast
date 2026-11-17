@@ -8,10 +8,9 @@ TIMING_MATTERS_MIN_SPREAD_G_PER_KWH = 20.0
 
 @dataclass(frozen=True, slots=True)
 class Window:
-    """A run of `slots` consecutive values starting at index `start`."""
+    """The run of consecutive values starting at index `start`, with its mean."""
 
     start: int
-    slots: int
     mean: float
 
 
@@ -46,4 +45,4 @@ def _best_window(
         if is_better(total, best_total):
             best_total = total
             best_start = start
-    return Window(start=best_start, slots=slots, mean=best_total / slots)
+    return Window(start=best_start, mean=best_total / slots)

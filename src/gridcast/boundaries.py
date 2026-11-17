@@ -16,6 +16,7 @@ SHETLAND_FRAME_PADDING_M = 5_000.0
 VIEW_MARGIN_M = 5_000.0
 
 _METRES_PER_UNIT = 1000.0
+_BOUNDARY_AREAS = frozenset(region.boundary_area for region in REGIONS)
 # A closed ring needs three distinct points plus the repeated first point.
 _MIN_RING_POINTS = 4
 
@@ -45,15 +46,26 @@ class MapGeometry:
     regions: dict[str, RegionShape]
 
 
-def build_map(
-    geojson: Any,  # parsed JSON, validated by the lookups below
-    tolerance_m: float = SIMPLIFY_TOLERANCE_M,
-) -> MapGeometry:
+def build_map(geojson: Any) -> MapGeometry:  # parsed JSON, validated by the lookups below
     """Project a boundary FeatureCollection to SVG. Raises ValueError on a wrong CRS or shape."""
     try:
-        return _build_map(geojson, tolerance_m)
-    except (KeyError, IndexError, TypeError) as err:
+        crs_name = geojson["crs"]["properties"]["name"]
+        features = list(geojson["features"])
+    except (KeyError, TypeError) as err:
         raise ValueError(f"boundary file is malformed: {err!r}") from err
+    if "27700" not in crs_name:
+        raise ValueError(f"expected British National Grid (27700), got CRS {crs_name!r}")
+    by_area: dict[str, list[Polygon]] = {}
+    for position, feature in enumerate(features):
+        area, polygons = _parse_feature(feature, position)
+        by_area.setdefault(area, []).extend(polygons)
+    unexpected = sorted(set(by_area) - _BOUNDARY_AREAS)
+    if unexpected:
+        raise ValueError(f"unexpected areas {unexpected}, expected only {sorted(_BOUNDARY_AREAS)}")
+    missing = [region.boundary_area for region in REGIONS if not by_area.get(region.boundary_area)]
+    if missing:
+        raise ValueError(f"no boundary found for areas {missing}")
+    return _project(by_area)
 
 
 def simplify_line(points: Sequence[Point], tolerance_m: float) -> list[Point]:
@@ -115,18 +127,19 @@ def label_point(polygon: Polygon) -> Point:
     return ((left + right) / 2, centroid_y)
 
 
-def _build_map(geojson: Any, tolerance_m: float) -> MapGeometry:
-    crs_name = geojson["crs"]["properties"]["name"]
-    if "27700" not in crs_name:
-        raise ValueError(f"expected British National Grid (27700), got CRS {crs_name!r}")
-    by_area: dict[str, list[Polygon]] = {}
-    for feature in geojson["features"]:
-        polygons = _polygons_of(feature["geometry"], tolerance_m)
-        by_area.setdefault(feature["properties"]["Area"], []).extend(polygons)
-    missing = [region.boundary_area for region in REGIONS if not by_area.get(region.boundary_area)]
-    if missing:
-        raise ValueError(f"no boundary found for areas {missing}")
-    frame_m = _shift_shetland(by_area)
+def _parse_feature(feature: Any, position: int) -> tuple[str, list[Polygon]]:
+    try:
+        area = feature["properties"]["Area"]
+    except (KeyError, TypeError) as err:
+        raise ValueError(f"feature {position} is malformed: {err!r}") from err
+    try:
+        return area, _polygons_of(feature["geometry"])
+    except (KeyError, IndexError, TypeError, ValueError) as err:
+        raise ValueError(f"feature {position} ({area}) is malformed: {err!r}") from err
+
+
+def _project(by_area: dict[str, list[Polygon]]) -> MapGeometry:
+    by_area, frame_m = _shift_shetland(by_area)
     exterior_points = [p for polygons in by_area.values() for poly in polygons for p in poly[0]]
     west, south, east, north = _bounds(
         [*exterior_points, (frame_m[0], frame_m[1]), (frame_m[2], frame_m[3])]
@@ -157,7 +170,7 @@ def _build_map(geojson: Any, tolerance_m: float) -> MapGeometry:
     )
 
 
-def _polygons_of(geometry: Any, tolerance_m: float) -> list[Polygon]:
+def _polygons_of(geometry: Any) -> list[Polygon]:
     kind = geometry["type"]
     if kind == "Polygon":
         raw_polygons = [geometry["coordinates"]]
@@ -165,20 +178,26 @@ def _polygons_of(geometry: Any, tolerance_m: float) -> list[Polygon]:
         raw_polygons = geometry["coordinates"]
     else:
         raise ValueError(f"expected Polygon or MultiPolygon, got {kind!r}")
-    prepared = (_prepare_polygon(raw, tolerance_m) for raw in raw_polygons)
+    prepared = (_prepare_polygon(raw) for raw in raw_polygons)
     return [polygon for polygon in prepared if polygon is not None]
 
 
-def _prepare_polygon(raw_rings: Any, tolerance_m: float) -> Polygon | None:
-    rings = [_closed_ring(raw) for raw in raw_rings]
-    if ring_area(rings[0]) < MIN_RING_AREA_M2:
+def _prepare_polygon(raw_rings: Any) -> Polygon | None:
+    exterior, *holes = (_closed_ring(raw) for raw in raw_rings)
+    if ring_area(exterior) < MIN_RING_AREA_M2:
         return None
-    simplified = [
-        simplify_ring(ring, tolerance_m) for ring in rings if ring_area(ring) >= MIN_RING_AREA_M2
+    simplified_exterior = simplify_ring(exterior, SIMPLIFY_TOLERANCE_M)
+    if len(simplified_exterior) < _MIN_RING_POINTS:
+        return None
+    simplified_holes = (
+        simplify_ring(hole, SIMPLIFY_TOLERANCE_M)
+        for hole in holes
+        if ring_area(hole) >= MIN_RING_AREA_M2
+    )
+    return [
+        simplified_exterior,
+        *(ring for ring in simplified_holes if len(ring) >= _MIN_RING_POINTS),
     ]
-    if len(simplified[0]) < _MIN_RING_POINTS:
-        return None
-    return [ring for ring in simplified if len(ring) >= _MIN_RING_POINTS]
 
 
 def _closed_ring(raw: Any) -> Ring:
@@ -186,22 +205,27 @@ def _closed_ring(raw: Any) -> Ring:
     return ring if ring[0] == ring[-1] else [*ring, ring[0]]
 
 
-def _shift_shetland(by_area: dict[str, list[Polygon]]) -> tuple[float, float, float, float]:
-    """Move Shetland south in place and return its padded frame as west, south, east, north."""
+def _shift_shetland(
+    by_area: dict[str, list[Polygon]],
+) -> tuple[dict[str, list[Polygon]], tuple[float, float, float, float]]:
+    """Return the areas with Shetland moved south, and its padded west, south, east, north frame."""
     moved: list[Polygon] = []
-    for polygons in by_area.values():
-        for position, polygon in enumerate(polygons):
+    shifted: dict[str, list[Polygon]] = {}
+    for area, polygons in by_area.items():
+        shifted[area] = []
+        for polygon in polygons:
             if all(northing > SHETLAND_MIN_NORTHING_M for _, northing in polygon[0]):
-                polygons[position] = [
+                polygon = [
                     [(easting, northing + SHETLAND_SHIFT_NORTHING_M) for easting, northing in ring]
                     for ring in polygon
                 ]
-                moved.append(polygons[position])
+                moved.append(polygon)
+            shifted[area].append(polygon)
     if not moved:
         raise ValueError(f"no polygon lies above northing {SHETLAND_MIN_NORTHING_M}")
     west, south, east, north = _bounds([p for polygon in moved for p in polygon[0]])
     pad = SHETLAND_FRAME_PADDING_M
-    return (west - pad, south - pad, east + pad, north + pad)
+    return shifted, (west - pad, south - pad, east + pad, north + pad)
 
 
 def _bounds(points: Sequence[Point]) -> tuple[float, float, float, float]:
