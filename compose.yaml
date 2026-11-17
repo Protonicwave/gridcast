@@ -1,0 +1,16 @@
+# Local PostgreSQL for the test suite and for trying the collector.
+# Trust authentication is safe only because the port is bound to the loopback address.
+services:
+  db:
+    image: postgres:17.10-alpine
+    environment:
+      POSTGRES_USER: gridcast
+      POSTGRES_DB: gridcast
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "gridcast", "-d", "gridcast"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
