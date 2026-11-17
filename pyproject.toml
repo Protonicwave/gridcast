@@ -1,0 +1,43 @@
+[project]
+name = "gridcast"
+version = "0.1.0"
+description = "Regional forecast of the cleanest time to use electricity in Great Britain"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+gridcast-snapshot = "gridcast.snapshot:main"
+
+[dependency-groups]
+dev = [
+    "coverage==7.13.1",
+    "mypy==2.3.1",
+    "pip-audit==2.10.0",
+    "pytest==9.1.1",
+    "ruff==0.16.9",
+    "vulture==2.14",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "S", "PT", "N", "C90", "PLR"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+# pytest's assertion rewriting relies on bare assert, and test tables use literal values.
+"tests/**" = ["S101", "PLR2004"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
