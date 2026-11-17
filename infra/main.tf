@@ -152,6 +152,7 @@ resource "azurerm_container_app_job" "collect" {
   location                     = azurerm_resource_group.gridcast.location
   resource_group_name          = azurerm_resource_group.gridcast.name
   container_app_environment_id = azapi_resource.environment.id
+  workload_profile_name        = "Consumption"
   # Three calls of at most 75 s each, retries included, fit inside this limit.
   replica_timeout_in_seconds = 240
   # A failed run is not repeated: the next scheduled run is 30 minutes away.
@@ -199,6 +200,7 @@ resource "azurerm_container_app_job" "migrate" {
   location                     = azurerm_resource_group.gridcast.location
   resource_group_name          = azurerm_resource_group.gridcast.name
   container_app_environment_id = azapi_resource.environment.id
+  workload_profile_name        = "Consumption"
   replica_timeout_in_seconds   = 120
   replica_retry_limit          = 0
 
