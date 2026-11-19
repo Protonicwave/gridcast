@@ -103,6 +103,12 @@ terraform -chdir=infra output api_url
 
 The migrate job runs the API image, which holds the same package as the collector's, so a migration needs no new collector image. It connects as the server's admin, applies pending migrations and lets the collector's and the API's roles log in with passwords Terraform generated. The collector's role may only insert and select, and update actuals; the API's may only select forecasts and when they were fetched. `api_image` sets the API app's image only when the app is created: later images go to it with `az containerapp update`.
 
+The API's budget is a median under 500 ms for London's outlook over 20 warm requests. This measures it, and reports the first request separately because it includes a cold start when the app has scaled to zero; it exits 1 over budget:
+
+```sh
+uv run python scripts/time_outlook.py "$(terraform -chdir=infra output -raw api_url)"
+```
+
 ## Monitor
 
 A [healthchecks.io](https://healthchecks.io/) check with a 30-minute period and a 45-minute grace time receives a ping each time a run stores the regional forecast. It emails when no ping has arrived for 75 minutes, which also covers a job that never started. Its ping URL is a secret: keep it in the git-ignored `.env` as `TF_VAR_healthcheck_url`, not under the collector's own variable name, so a local run never pings the production check.
