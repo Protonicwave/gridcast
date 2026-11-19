@@ -81,22 +81,62 @@ jobs:
     permissions:
       contents: read
       packages: write
+    services:
+      db:
+        image: postgres:17.10-alpine
+        env:
+          POSTGRES_USER: gridcast
+          POSTGRES_DB: gridcast
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gridcast -d gridcast"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
     env:
-      IMAGE: ghcr.io/protonicwave/gridcast-collector:${{ github.sha }}
+      COLLECTOR_IMAGE: ghcr.io/protonicwave/gridcast-collector:${{ github.sha }}
+      API_IMAGE: ghcr.io/protonicwave/gridcast-api:${{ github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: docker build --tag "$IMAGE" .
-      - name: Check the image runs as a non-root user
+      - run: |
+          docker build --target collector --tag "$COLLECTOR_IMAGE" .
+          docker build --target api --tag "$API_IMAGE" .
+      - name: Check the images run as a non-root user
         run: |
-          test "$(docker run --rm --entrypoint id "$IMAGE" -u)" != 0
-          docker run --rm "$IMAGE" --help
-      - name: Report the image size
-        run: "docker image inspect \"$IMAGE\" --format 'image size {{.Size}} bytes'"
-      - name: Publish the image
+          test "$(docker run --rm --entrypoint id "$COLLECTOR_IMAGE" -u)" != 0
+          test "$(docker run --rm --entrypoint id "$API_IMAGE" -u)" != 0
+          docker run --rm "$COLLECTOR_IMAGE" --help
+      - name: Check the API image answers from a migrated, empty archive
+        env:
+          GRIDCAST_DATABASE_URL: postgresql://gridcast@127.0.0.1:5432/gridcast
+          GRIDCAST_ALLOWED_ORIGIN: https://protonicwave.github.io
+        run: |
+          docker run --rm --network host -e GRIDCAST_DATABASE_URL --entrypoint gridcast-migrate "$API_IMAGE"
+          docker run --detach --name api --network host \
+            -e GRIDCAST_DATABASE_URL -e GRIDCAST_ALLOWED_ORIGIN "$API_IMAGE"
+          # curl exits non-zero until the server listens; any HTTP answer ends the wait.
+          for attempt in $(seq 20); do
+            status="$(curl --silent --max-time 5 --output body.json --write-out '%{http_code}' \
+              http://127.0.0.1:8000/regions/13/outlook)" && break
+            sleep 1
+          done
+          docker logs api
+          cat body.json
+          # This detail, unlike the unavailable one, means the archive was queried.
+          test "$status" = 503
+          grep --quiet 'no forecast has been archived' body.json
+      - name: Report the image sizes
+        run: |
+          docker image inspect "$COLLECTOR_IMAGE" --format 'collector image size {{.Size}} bytes'
+          docker image inspect "$API_IMAGE" --format 'api image size {{.Size}} bytes'
+      - name: Publish the images
         if: github.event_name != 'pull_request'
         env:
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REGISTRY_USER: ${{ github.actor }}
         run: |
           echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
-          docker push "$IMAGE"
+          docker push "$COLLECTOR_IMAGE"
+          docker push "$API_IMAGE"

@@ -68,7 +68,7 @@ docker run --rm -p 127.0.0.1:8000:8000 -e GRIDCAST_DATABASE_URL -e GRIDCAST_ALLO
 
 Inside a container, `127.0.0.1` is the container itself: point `GRIDCAST_DATABASE_URL` at the local database through the compose network (`--network gridcast_default` and host `db`).
 
-On each pull request, GitHub Actions runs the checks below and builds the image. On `main` it also pushes `ghcr.io/protonicwave/gridcast-collector:<commit sha>`. To publish a branch's image before merging it, run `gh workflow run ci --ref <branch>`.
+On each pull request, GitHub Actions runs the checks below, builds both images and checks the API image answers from a freshly migrated archive. On `main` it also pushes `ghcr.io/protonicwave/gridcast-collector:<commit sha>` and `ghcr.io/protonicwave/gridcast-api:<commit sha>`. To publish a branch's images before merging it, run `gh workflow run ci --ref <branch>`.
 
 ## Deploy
 
