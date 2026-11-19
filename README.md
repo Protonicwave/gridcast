@@ -72,7 +72,7 @@ On each pull request, GitHub Actions runs the checks below, builds both images a
 
 ## Deploy
 
-The collector runs on Azure as a Container Apps job at 5 and 35 minutes past each hour, UTC, writing to a PostgreSQL 17 flexible server. Every resource is in Norway East, and `infra/` describes them in Terraform. The server accepts connections from Azure services only, other customers' included, so its passwords are the barrier. A second job, started by hand, applies migrations from inside Azure.
+The collector runs on Azure as a Container Apps job at 5 and 35 minutes past each hour, UTC, writing to a PostgreSQL 17 flexible server. The container app `ca-gridcast-api` serves the outlook from the same server as the read-only role, scaling to zero when idle. Every resource is in Norway East, and `infra/` describes them in Terraform. The server accepts connections from Azure services only, other customers' included, so its passwords are the barrier. A second job, started by hand, applies migrations from inside Azure.
 
 Needs the Azure CLI, logged in with `az login`, and Terraform 1.17. Once per subscription, register the resource providers and create the storage for Terraform's state, which holds the database passwords:
 
@@ -88,17 +88,20 @@ az storage container create --name tfstate --account-name stgridcasttfstate --au
 
 Storage account names are global, so a fork picks its own and changes it in `infra/main.tf` too, along with the image owner in `infra/variables.tf`.
 
-To deploy an image CI has published, then apply any new migrations:
+To deploy images CI has published, then apply any new migrations:
 
 ```sh
 export ARM_SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
 export TF_VAR_healthcheck_url=<the check's ping URL>
 terraform -chdir=infra init
-terraform -chdir=infra apply -var collector_image=ghcr.io/protonicwave/gridcast-collector:<commit sha>
+terraform -chdir=infra apply \
+  -var collector_image=ghcr.io/protonicwave/gridcast-collector:<commit sha> \
+  -var api_image=ghcr.io/protonicwave/gridcast-api:<commit sha>
 az containerapp job start --name caj-gridcast-migrate --resource-group rg-gridcast
+terraform -chdir=infra output api_url
 ```
 
-The migrate job connects as the server's admin, applies pending migrations and lets the collector's role log in with a password Terraform generated. That role may only insert and select, and update actuals.
+The migrate job runs the API image, which holds the same package as the collector's, so a migration needs no new collector image. It connects as the server's admin, applies pending migrations and lets the collector's and the API's roles log in with passwords Terraform generated. The collector's role may only insert and select, and update actuals; the API's may only select forecasts and when they were fetched. `api_image` sets the API app's image only when the app is created: later images go to it with `az containerapp update`.
 
 ## Monitor
 
