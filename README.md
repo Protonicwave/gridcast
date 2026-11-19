@@ -77,7 +77,7 @@ The collector runs on Azure as a Container Apps job at 5 and 35 minutes past eac
 Needs the Azure CLI, logged in with `az login`, and Terraform 1.17. Once per subscription, register the resource providers and create the storage for Terraform's state, which holds the database passwords:
 
 ```sh
-for namespace in Microsoft.App Microsoft.OperationalInsights Microsoft.DBforPostgreSQL Microsoft.Storage; do
+for namespace in Microsoft.App Microsoft.OperationalInsights Microsoft.DBforPostgreSQL Microsoft.Storage Microsoft.ManagedIdentity; do
   az provider register --namespace "$namespace"
 done
 az group create --name rg-gridcast-tfstate --location norwayeast
