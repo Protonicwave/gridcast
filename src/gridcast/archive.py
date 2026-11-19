@@ -7,7 +7,7 @@ from typing import Any, Literal
 import psycopg
 
 from gridcast.carbon_api import FetchResult
-from gridcast.issues import Actual, Issue, Parsed
+from gridcast.issues import Actual, Issue, Parsed, StoredIssue
 
 DATABASE_URL_VARIABLE = "GRIDCAST_DATABASE_URL"
 CONNECT_TIMEOUT_SECONDS = 10
@@ -50,6 +50,21 @@ def store_fetch(
         [(fetch_id,)] = cursor.fetchall()
         issues_added = _add_issues(cursor, fetch_id, parsed.issues)
         return issues_added + _add_actuals(cursor, fetch_id, parsed.actuals)
+
+
+def latest_issue(connection: psycopg.Connection[Any], area_id: int) -> StoredIssue | None:
+    """The regional issue of `area_id` with the latest first slot, or None if there is none."""
+    row = connection.execute(
+        "select issue.first_slot, issue.intensities_g_per_kwh, api_fetch.fetched_at"
+        " from forecast_issue as issue inner join api_fetch on issue.fetch_id = api_fetch.fetch_id"
+        " where issue.feed = 'regional' and issue.area_id = %s"
+        " order by issue.first_slot desc limit 1",
+        (area_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    first_slot, intensities, fetched_at = row
+    return StoredIssue(first_slot, tuple(intensities), fetched_at)
 
 
 def _add_issues(cursor: psycopg.Cursor[Any], fetch_id: int, issues: Sequence[Issue]) -> int:
