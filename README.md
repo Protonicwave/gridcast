@@ -77,7 +77,7 @@ docker run --rm -p 127.0.0.1:8000:8000 -e GRIDCAST_DATABASE_URL -e GRIDCAST_ALLO
 
 Inside a container, `127.0.0.1` is the container itself: point `GRIDCAST_DATABASE_URL` at the local database through the compose network (`--network gridcast_default` and host `db`).
 
-On each pull request, GitHub Actions runs the checks below, builds both images and checks the API image answers from a freshly migrated archive. On `main` it also pushes `ghcr.io/protonicwave/gridcast-collector:<commit sha>` and `ghcr.io/protonicwave/gridcast-api:<commit sha>`. To run the whole pipeline, deployment included, for a branch before merging it, run `gh workflow run ci --ref <branch>`.
+On each pull request, GitHub Actions runs the checks below, builds both images and checks the API image answers from a freshly migrated archive. On `main` it also pushes `ghcr.io/protonicwave/gridcast-collector:<commit sha>` and `ghcr.io/protonicwave/gridcast-api:<commit sha>`. To run the whole pipeline for a branch before merging it, run `gh workflow run ci --ref <branch>`. That deploys the branch to production, so it works only for branches the environments `production` and `github-pages` allow.
 
 ## Deploy
 
@@ -132,6 +132,8 @@ The jobs need configuration in the repository, set once:
 - Environments `production`, which holds the variables below and is the subject the Azure identity trusts, and `github-pages`.
 - Variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` on `production`, from `terraform -chdir=infra output deploy_client_id`, `tenant_id` and `subscription_id`.
 - Repository variable `GRIDCAST_API_URL`, from `terraform -chdir=infra output api_url`.
+
+CI deploys the API image but does not run migrations. Before merging a commit that adds one, start the migrate job as in Deploy.
 
 The API's origin is built into the page, and the API allows only the Pages origin, so a custom domain needs `GRIDCAST_ALLOWED_ORIGIN` changed in `infra/` as well.
 

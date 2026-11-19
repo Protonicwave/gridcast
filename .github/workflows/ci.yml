@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+# A newer push must not be overtaken by an older run finishing its deploy last.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   gates:
     runs-on: ubuntu-latest
@@ -164,6 +169,10 @@ jobs:
         env:
           API_URL: ${{ vars.GRIDCAST_API_URL }}
         run: |
+          # An old revision keeps answering if the new one never becomes ready, so compare them first.
+          latest="$(az containerapp show --name ca-gridcast-api --resource-group rg-gridcast             --query properties.latestRevisionName --output tsv)"
+          ready="$(az containerapp show --name ca-gridcast-api --resource-group rg-gridcast             --query properties.latestReadyRevisionName --output tsv)"
+          test "$latest" = "$ready" || { echo "revision $latest is not ready; $ready is serving" >&2; exit 1; }
           # The app scales to zero, so the first request waits for a cold start of up to a minute.
           for attempt in $(seq 12); do
             status="$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}'               "$API_URL/regions/13/outlook")" || status=000
