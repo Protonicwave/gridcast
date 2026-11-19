@@ -1,15 +1,15 @@
 /** Fetches a region's outlook from the Gridcast API and checks it before anything draws it. */
 
-const DURATIONS_HOURS = [1, 2, 3, 4] as const;
-type DurationHours = (typeof DURATIONS_HOURS)[number];
+export const DURATIONS_HOURS = [1, 2, 3, 4] as const;
+export type DurationHours = (typeof DURATIONS_HOURS)[number];
 
-interface ForecastWindow {
+export interface ForecastWindow {
   /** Index of the window's first half hour in `Outlook.intensities`. */
   readonly start: number;
   readonly meanGPerKwh: number;
 }
 
-interface DurationWindows {
+export interface DurationWindows {
   readonly cleanest: ForecastWindow;
   readonly dirtiest: ForecastWindow;
   readonly timingMatters: boolean;
