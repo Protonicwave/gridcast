@@ -1,11 +1,14 @@
 """The collector: fetches NESO's forecasts and actuals and stores them in the archive."""
 
 import argparse
+import http.client
 import json
 import logging
 import os
 import sys
 import time
+import urllib.parse
+import urllib.request
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -35,6 +38,9 @@ from gridcast.issues import (
 
 EXIT_FAILED = 1
 EXIT_USAGE = 2
+
+HEALTHCHECK_URL_VARIABLE = "GRIDCAST_HEALTHCHECK_URL"
+HEALTHCHECK_TIMEOUT_SECONDS = 10
 
 # Actuals arrive late and are sometimes revised, so each run asks again for the last day.
 ACTUALS_LOOKBACK = timedelta(hours=24)
@@ -69,27 +75,62 @@ _CALLS = (
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run once. Exits 1 if any fetch, parse or write failed, 2 if misconfigured."""
+    """Run once. Exits 1 if any fetch, parse or write failed, 2 if misconfigured.
+
+    Pings the URL in $GRIDCAST_HEALTHCHECK_URL, if set, once the regional forecast is stored.
+    """
     argparse.ArgumentParser(
         description="Fetch NESO's regional and national forecasts and the national actuals "
-        f"and store them, with the raw responses, in the database at ${DATABASE_URL_VARIABLE}."
+        f"and store them, with the raw responses, in the database at ${DATABASE_URL_VARIABLE}. "
+        f"Ping ${HEALTHCHECK_URL_VARIABLE}, if set, once the regional forecast is stored."
     ).parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     database_url = os.environ.get(DATABASE_URL_VARIABLE)
     if not database_url:
         print(f"gridcast-collect: {DATABASE_URL_VARIABLE} is not set", file=sys.stderr)
         return EXIT_USAGE
+    healthcheck_url = os.environ.get(HEALTHCHECK_URL_VARIABLE) or None
+    if healthcheck_url is not None and not _is_https_with_host(healthcheck_url):
+        # The URL itself is a credential, so the message names only the variable.
+        print(
+            f"gridcast-collect: {HEALTHCHECK_URL_VARIABLE} must be an https URL with a host",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
     started = time.monotonic()
     now = datetime.now(UTC)
     try:
         with psycopg.connect(database_url, connect_timeout=CONNECT_TIMEOUT_SECONDS) as connection:
             # Each call is stored on its own, so one failing leaves the others archived.
-            outcomes = [_run(connection, call, now) for call in _CALLS]
+            is_stored_by_endpoint = {call.endpoint: _run(connection, call, now) for call in _CALLS}
     except psycopg.Error as err:
         log.error("archive connection failed error=%r", str(err))
         return EXIT_FAILED
+    if healthcheck_url is not None and is_stored_by_endpoint["regional_forecast"]:
+        _ping(healthcheck_url)
     log.info("run finished seconds=%.1f", time.monotonic() - started)
-    return 0 if all(outcomes) else EXIT_FAILED
+    return 0 if all(is_stored_by_endpoint.values()) else EXIT_FAILED
+
+
+def _is_https_with_host(url: str) -> bool:
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme == "https" and bool(parts.hostname)
+
+
+def _ping(url: str) -> None:
+    """Tell the health check the regional forecast reached the archive. Failure is only logged."""
+    # S310 warns that urlopen accepts file: URLs; main accepts only https URLs here.
+    request = urllib.request.Request(url, headers={"User-Agent": "gridcast-collector"})  # noqa: S310
+    try:
+        with urllib.request.urlopen(request, timeout=HEALTHCHECK_TIMEOUT_SECONDS) as response:  # noqa: S310
+            status: int = response.status
+    # A failed ping only logs: the check emails once pings stop for longer than its grace
+    # period, so one lost ping costs nothing, and the archive was written either way.
+    # ValueError covers a URL the network layer rejects, such as a host with an empty label.
+    except (OSError, http.client.HTTPException, ValueError) as err:
+        log.error("health check ping failed error=%r", f"{type(err).__name__}: {err}")
+        return
+    log.info("health check pinged status=%d", status)
 
 
 def _run(connection: psycopg.Connection[Any], call: _Call, now: datetime) -> bool:

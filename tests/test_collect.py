@@ -2,6 +2,7 @@ import gzip
 import json
 import time
 import urllib.request
+from contextlib import AbstractContextManager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from gridcast.forecast import TIME_FORMAT
 
 SAVED_RESPONSE = Path(__file__).parent.parent / "data" / "regional_fw48h_20261117T1150Z.json"
 UNREACHABLE_DATABASE_URL = "postgresql://gridcast@127.0.0.1:1/gridcast"
+HEALTHCHECK_URL = "https://hc-ping.example/5f0c1d2e"
 
 Archive = psycopg.Connection[tuple[object, ...]]
 
@@ -22,6 +24,11 @@ Archive = psycopg.Connection[tuple[object, ...]]
 @pytest.fixture(autouse=True)
 def no_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(time, "sleep", lambda seconds: None)
+
+
+@pytest.fixture(autouse=True)
+def no_health_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GRIDCAST_HEALTHCHECK_URL", raising=False)
 
 
 def json_response(data: object) -> FakeResponse:
@@ -224,3 +231,136 @@ def test_stores_a_malformed_national_body_raw_with_its_error(
     [(_, _, _, raw_gzip, error)] = fetches(archive, "national_actual")
     assert raw_gzip is not None
     assert error == "data holds no slots"
+
+
+def collect_with_health_check(
+    monkeypatch: pytest.MonkeyPatch, database_url: str, *answers: FakeResponse | Exception
+) -> tuple[int, list[str]]:
+    """Run the collector with the health check configured; return its status and the URLs asked."""
+    monkeypatch.setenv("GRIDCAST_HEALTHCHECK_URL", HEALTHCHECK_URL)
+    monkeypatch.setenv("GRIDCAST_DATABASE_URL", database_url)
+    server = FakeServer(*answers)
+    monkeypatch.setattr(urllib.request, "urlopen", server.urlopen)
+    status = main([])
+    assert not server.outcomes, "the collector left scripted answers unused"
+    return status, [url for url, _ in server.requests]
+
+
+def test_pings_the_health_check_once_the_regional_forecast_is_stored(
+    archive: Archive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    status, urls = collect_with_health_check(
+        monkeypatch,
+        archive.info.dsn,
+        FakeResponse(SAVED_RESPONSE.read_bytes()),
+        good_national_forecast(),
+        good_national_actuals(),
+        FakeResponse(b"OK"),
+    )
+    assert status == 0
+    assert urls[-1] == HEALTHCHECK_URL
+    assert issue_count(archive) == 18
+
+
+def test_does_not_ping_the_health_check_when_the_regional_forecast_failed(
+    archive: Archive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    status, urls = collect_with_health_check(
+        monkeypatch,
+        archive.info.dsn,
+        http_error(404),
+        good_national_forecast(),
+        good_national_actuals(),
+    )
+    assert status == 1
+    assert HEALTHCHECK_URL not in urls
+
+
+@pytest.mark.parametrize(
+    "ping_answer", [http_error(500), TimeoutError("timed out")], ids=["http-500", "timeout"]
+)
+def test_a_failed_ping_leaves_the_run_successful(
+    archive: Archive, monkeypatch: pytest.MonkeyPatch, ping_answer: Exception
+) -> None:
+    status, urls = collect_with_health_check(
+        monkeypatch,
+        archive.info.dsn,
+        FakeResponse(SAVED_RESPONSE.read_bytes()),
+        good_national_forecast(),
+        good_national_actuals(),
+        ping_answer,
+    )
+    assert status == 0
+    assert urls.count(HEALTHCHECK_URL) == 1
+
+
+def test_pings_the_health_check_when_only_a_national_call_failed(
+    archive: Archive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    status, urls = collect_with_health_check(
+        monkeypatch,
+        archive.info.dsn,
+        FakeResponse(SAVED_RESPONSE.read_bytes()),
+        http_error(404),
+        good_national_actuals(),
+        FakeResponse(b"OK"),
+    )
+    assert status == 1
+    assert urls[-1] == HEALTHCHECK_URL
+
+
+def test_an_empty_health_check_url_means_no_ping(
+    archive: Archive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GRIDCAST_HEALTHCHECK_URL", "")
+    body = SAVED_RESPONSE.read_bytes()
+    assert (
+        collect_all(
+            monkeypatch,
+            archive.info.dsn,
+            FakeResponse(body),
+            good_national_forecast(),
+            good_national_actuals(),
+        )
+        == 0
+    )
+
+
+def test_a_ping_url_the_network_layer_rejects_leaves_the_run_successful(
+    archive: Archive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """urlopen raises UnicodeError, a ValueError, for a host with an empty label."""
+    body = SAVED_RESPONSE.read_bytes()
+    server = FakeServer(FakeResponse(body), good_national_forecast(), good_national_actuals())
+
+    def answer_or_reject(
+        request: urllib.request.Request, timeout: float
+    ) -> AbstractContextManager[FakeResponse]:
+        if request.full_url == "https://a..b/ping":
+            raise UnicodeError("label empty or too long")
+        return server.urlopen(request, timeout)
+
+    monkeypatch.setenv("GRIDCAST_DATABASE_URL", archive.info.dsn)
+    monkeypatch.setenv("GRIDCAST_HEALTHCHECK_URL", "https://a..b/ping")
+    monkeypatch.setattr(urllib.request, "urlopen", answer_or_reject)
+    assert main([]) == 0
+    assert not server.outcomes
+
+
+@pytest.mark.parametrize(
+    "healthcheck_url",
+    ["http://hc-ping.example/5f0c1d2e", "https:///5f0c1d2e", "hc-ping.example/5f0c1d2e"],
+    ids=["http", "no-host", "no-scheme"],
+)
+def test_refuses_a_health_check_url_that_is_not_https_with_a_host(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], healthcheck_url: str
+) -> None:
+    monkeypatch.setenv("GRIDCAST_DATABASE_URL", UNREACHABLE_DATABASE_URL)
+    monkeypatch.setenv("GRIDCAST_HEALTHCHECK_URL", healthcheck_url)
+    server = FakeServer()
+    monkeypatch.setattr(urllib.request, "urlopen", server.urlopen)
+    assert main([]) == 2
+    error = capsys.readouterr().err
+    assert "GRIDCAST_HEALTHCHECK_URL must be an https URL with a host" in error
+    assert "5f0c1d2e" not in error
+    assert server.requests == []

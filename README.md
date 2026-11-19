@@ -17,6 +17,11 @@ npm install
 
 `GRIDCAST_DATABASE_URL` is the archive's PostgreSQL connection URL, for example `postgresql://gridcast@127.0.0.1:5432/gridcast` for the local database below.
 
+Optional:
+
+- `GRIDCAST_HEALTHCHECK_URL`: an https URL `gridcast-collect` requests after each run that stores the regional forecast.
+- `GRIDCAST_COLLECTOR_PASSWORD`: when set, `gridcast-migrate` lets the role `gridcast_collector` log in with this password.
+
 ## Run
 
 Start the local PostgreSQL 17, create the archive's tables, then fetch and store the regional forecast, the national forecast and the last 24 hours of national actuals:
@@ -28,7 +33,7 @@ uv run gridcast-migrate
 uv run gridcast-collect
 ```
 
-`gridcast-collect` exits 1 if any fetch, parse or write failed, and 2 if `GRIDCAST_DATABASE_URL` is unset. Each call is stored on its own, with the raw response even when it does not parse. The view `collection_coverage` gives the share of half hours with a regional forecast recorded per UTC day, and `forecast_value` lists every forecast intensity with its horizon. The test suite empties this database, so do not keep data in it.
+`gridcast-collect` exits 1 if any fetch, parse or write failed, and 2 if `GRIDCAST_DATABASE_URL` is unset or `GRIDCAST_HEALTHCHECK_URL` is not an https URL with a host. Each call is stored on its own, with the raw response even when it does not parse. The view `collection_coverage` gives the share of half hours with a regional forecast recorded per UTC day, and `forecast_value` lists every forecast intensity with its horizon. The test suite empties this database, so do not keep data in it.
 
 Open `mockup/mockup.html` in a browser. The postcode lookup calls NESO's Carbon Intensity API, so it needs a network connection; everything else works offline.
 
@@ -47,7 +52,82 @@ docker build -t gridcast-collector .
 docker run --rm -e GRIDCAST_DATABASE_URL gridcast-collector
 ```
 
-On each pull request, GitHub Actions runs the checks below and builds the image. On `main` it also pushes `ghcr.io/protonicwave/gridcast-collector:<commit sha>`.
+On each pull request, GitHub Actions runs the checks below and builds the image. On `main` it also pushes `ghcr.io/protonicwave/gridcast-collector:<commit sha>`. To publish a branch's image before merging it, run `gh workflow run ci --ref <branch>`.
+
+## Deploy
+
+The collector runs on Azure as a Container Apps job at 5 and 35 minutes past each hour, UTC, writing to a PostgreSQL 17 flexible server. Every resource is in Norway East, and `infra/` describes them in Terraform. The server accepts connections from Azure services only, other customers' included, so its passwords are the barrier. A second job, started by hand, applies migrations from inside Azure.
+
+Needs the Azure CLI, logged in with `az login`, and Terraform 1.17. Once per subscription, register the resource providers and create the storage for Terraform's state, which holds the database passwords:
+
+```sh
+for namespace in Microsoft.App Microsoft.OperationalInsights Microsoft.DBforPostgreSQL Microsoft.Storage; do
+  az provider register --namespace "$namespace"
+done
+az group create --name rg-gridcast-tfstate --location norwayeast
+az storage account create --name stgridcasttfstate --resource-group rg-gridcast-tfstate \
+  --location norwayeast --sku Standard_LRS --min-tls-version TLS1_2 --allow-blob-public-access false
+az storage container create --name tfstate --account-name stgridcasttfstate --auth-mode key
+```
+
+Storage account names are global, so a fork picks its own and changes it in `infra/main.tf` too, along with the image owner in `infra/variables.tf`.
+
+To deploy an image CI has published, then apply any new migrations:
+
+```sh
+export ARM_SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
+export TF_VAR_healthcheck_url=<the check's ping URL>
+terraform -chdir=infra init
+terraform -chdir=infra apply -var collector_image=ghcr.io/protonicwave/gridcast-collector:<commit sha>
+az containerapp job start --name caj-gridcast-migrate --resource-group rg-gridcast
+```
+
+The migrate job connects as the server's admin, applies pending migrations and lets the collector's role log in with a password Terraform generated. That role may only insert and select, and update actuals.
+
+## Monitor
+
+A [healthchecks.io](https://healthchecks.io/) check with a 30-minute period and a 45-minute grace time receives a ping each time a run stores the regional forecast. It emails when no ping has arrived for 75 minutes, which also covers a job that never started. Its ping URL is a secret: keep it in the git-ignored `.env` as `TF_VAR_healthcheck_url`, not under the collector's own variable name, so a local run never pings the production check.
+
+Recent runs and their outcome:
+
+```sh
+az containerapp job execution list --name caj-gridcast-collect --resource-group rg-gridcast --output table
+```
+
+Each run logs one `fetch stored` line per call, with its status, attempts and `duration_ms`, then `run finished` with the total seconds. The logs reach the Log Analytics workspace `log-gridcast` a few minutes later:
+
+```kusto
+ContainerAppConsoleLogs_CL
+| where ContainerJobName_s == "caj-gridcast-collect"
+| project TimeGenerated, Log_s
+| order by TimeGenerated desc
+```
+
+The server's `storage_used` metric includes the write-ahead log and system databases, so measure the archive itself from inside Azure: save this as `query.yaml`, with the deployed image tag, and start a one-off run of the collector job with it. The output appears in the logs above.
+
+```yaml
+containers:
+  - name: collect
+    image: ghcr.io/protonicwave/gridcast-collector:<commit sha>
+    command:
+      - python
+      - -c
+      - |
+        import os, psycopg
+        with psycopg.connect(os.environ["GRIDCAST_DATABASE_URL"]) as c:
+            print("archive size_bytes", c.execute("select pg_database_size(current_database())").fetchone()[0])
+            print("coverage", c.execute("select * from collection_coverage").fetchall())
+    env:
+      - name: GRIDCAST_DATABASE_URL
+        secretRef: database-url
+    resources:
+      cpu: 0.25
+      memory: 0.5Gi
+```
+
+```sh
+az containerapp job start --name caj-gridcast-collect --resource-group rg-gridcast --yaml query.yaml
+```
 
 ## Test
 

@@ -12,6 +12,9 @@ RUN uv sync --locked --no-dev --no-editable
 FROM python:3.12-slim
 RUN useradd --system --no-create-home --uid 10001 collector
 COPY --from=build /app/.venv /app/.venv
-ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
+# psycopg's bundled OpenSSL looks for trusted roots under its own build prefix, which
+# does not exist here; this points sslrootcert=system at Debian's bundle instead.
+ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 USER collector
 ENTRYPOINT ["gridcast-collect"]
