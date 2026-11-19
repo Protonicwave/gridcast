@@ -169,15 +169,14 @@ jobs:
         env:
           API_URL: ${{ vars.GRIDCAST_API_URL }}
         run: |
-          # An old revision keeps answering if the new one never becomes ready, so compare them first.
-          latest="$(az containerapp show --name ca-gridcast-api --resource-group rg-gridcast             --query properties.latestRevisionName --output tsv)"
-          ready="$(az containerapp show --name ca-gridcast-api --resource-group rg-gridcast             --query properties.latestReadyRevisionName --output tsv)"
-          test "$latest" = "$ready" || { echo "revision $latest is not ready; $ready is serving" >&2; exit 1; }
-          # The app scales to zero, so the first request waits for a cold start of up to a minute.
+          # An old revision keeps answering 200 if the new one never becomes ready, so a 200 counts
+          # only once the newest revision is the ready one. A scaled-to-zero app becomes ready on a request.
           for attempt in $(seq 12); do
             status="$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}'               "$API_URL/regions/13/outlook")" || status=000
-            echo "attempt $attempt: HTTP $status"
-            test "$status" = 200 && exit 0
+            latest="$(az containerapp show --name ca-gridcast-api --resource-group rg-gridcast               --query properties.latestRevisionName --output tsv)"
+            ready="$(az containerapp show --name ca-gridcast-api --resource-group rg-gridcast               --query properties.latestReadyRevisionName --output tsv)"
+            echo "attempt $attempt: HTTP $status, newest revision $latest, ready revision $ready"
+            test "$status" = 200 && test "$latest" = "$ready" && exit 0
             sleep 5
           done
           echo "the API did not answer 200 within the wait" >&2
