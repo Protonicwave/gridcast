@@ -341,7 +341,8 @@ resource "azurerm_federated_identity_credential" "deploy" {
   user_assigned_identity_id = azurerm_user_assigned_identity.deploy.id
   audience                  = ["api://AzureADTokenExchange"]
   issuer                    = "https://token.actions.githubusercontent.com"
-  subject                   = "repo:Protonicwave/gridcast:environment:production"
+  # The repository issues immutable subjects (owner and repository IDs), which survive a rename.
+  subject = "repo:Protonicwave@92551449/gridcast@1461439537:environment:production"
 }
 
 # Scoped to the API app, so the identity cannot touch the archive or the collector.
