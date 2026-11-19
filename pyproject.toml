@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Regional forecast of the cleanest time to use electricity in Great Britain"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi==0.165.0",
     "psycopg[binary]==3.3.9",
+    "uvicorn==0.54.0",
 ]
 
 [project.scripts]
@@ -15,6 +17,7 @@ gridcast-snapshot = "gridcast.snapshot:main"
 [dependency-groups]
 dev = [
     "coverage==7.13.1",
+    "httpx2==2.16.2",
     "mypy==2.3.1",
     "pip-audit==2.10.0",
     "pytest==9.1.1",

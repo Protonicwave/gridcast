@@ -21,6 +21,8 @@ Optional:
 
 - `GRIDCAST_HEALTHCHECK_URL`: an https URL `gridcast-collect` requests after each run that stores the regional forecast.
 - `GRIDCAST_COLLECTOR_PASSWORD`: when set, `gridcast-migrate` lets the role `gridcast_collector` log in with this password.
+- `GRIDCAST_READER_PASSWORD`: likewise for the read-only role `gridcast_reader`, which the API connects as.
+- `GRIDCAST_ALLOWED_ORIGIN`: the one browser origin the API allows, for example `https://protonicwave.github.io`. Required by `gridcast.api:app_from_environment`.
 
 ## Run
 
@@ -34,6 +36,16 @@ uv run gridcast-collect
 ```
 
 `gridcast-collect` exits 1 if any fetch, parse or write failed, and 2 if `GRIDCAST_DATABASE_URL` is unset or `GRIDCAST_HEALTHCHECK_URL` is not an https URL with a host. Each call is stored on its own, with the raw response even when it does not parse. The view `collection_coverage` gives the share of half hours with a regional forecast recorded per UTC day, and `forecast_value` lists every forecast intensity with its horizon. The test suite empties this database, so do not keep data in it.
+
+Serve a region's outlook, the forecast from the current half hour with its cleanest and dirtiest windows, from the archive:
+
+```sh
+export GRIDCAST_ALLOWED_ORIGIN=http://127.0.0.1:5173
+uv run uvicorn --factory gridcast.api:app_from_environment
+curl http://127.0.0.1:8000/regions/13/outlook
+```
+
+`/regions/<1 to 14>/outlook` answers 404 for another number, 422 for a value that is not an integer, and 503 when the archive holds no usable forecast or cannot be read.
 
 Open `mockup/mockup.html` in a browser. The postcode lookup calls NESO's Carbon Intensity API, so it needs a network connection; everything else works offline.
 
