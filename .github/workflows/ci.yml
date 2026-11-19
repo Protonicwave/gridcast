@@ -4,11 +4,16 @@ on:
   pull_request:
   push:
     branches: [main]
-  # Publishes a branch's image, so it can be deployed before it is merged.
+  # Runs the whole pipeline, deployment included, for the branch it is started on.
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# A newer push must not be overtaken by an older run finishing its deploy last.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   gates:
@@ -42,7 +47,7 @@ jobs:
       - run: uv run coverage run --branch --source=gridcast -m pytest -q
       - run: >-
           uv run coverage report --show-missing --fail-under=100
-          --include="src/gridcast/issues.py,src/gridcast/archive.py"
+          --include="src/gridcast/issues.py,src/gridcast/archive.py,src/gridcast/outlook.py"
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
@@ -55,6 +60,25 @@ jobs:
           uv export --format pylock.toml --no-emit-project -o "$tmp/pylock.toml"
           uv run pip-audit --locked "$tmp"
 
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run test -- --coverage --coverage.include=src/forecastApi.ts --coverage.thresholds.100
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run knip
+      - run: npm run build
+      - run: npm audit
+
   image:
     needs: gates
     runs-on: ubuntu-latest
@@ -62,22 +86,149 @@ jobs:
     permissions:
       contents: read
       packages: write
+    services:
+      db:
+        image: postgres:17.10-alpine
+        env:
+          POSTGRES_USER: gridcast
+          POSTGRES_DB: gridcast
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gridcast -d gridcast"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
     env:
-      IMAGE: ghcr.io/protonicwave/gridcast-collector:${{ github.sha }}
+      COLLECTOR_IMAGE: ghcr.io/protonicwave/gridcast-collector:${{ github.sha }}
+      API_IMAGE: ghcr.io/protonicwave/gridcast-api:${{ github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: docker build --tag "$IMAGE" .
-      - name: Check the image runs as a non-root user
+      - run: |
+          docker build --target collector --tag "$COLLECTOR_IMAGE" .
+          docker build --target api --tag "$API_IMAGE" .
+      - name: Check the images run as a non-root user
         run: |
-          test "$(docker run --rm --entrypoint id "$IMAGE" -u)" != 0
-          docker run --rm "$IMAGE" --help
-      - name: Report the image size
-        run: "docker image inspect \"$IMAGE\" --format 'image size {{.Size}} bytes'"
-      - name: Publish the image
+          test "$(docker run --rm --entrypoint id "$COLLECTOR_IMAGE" -u)" != 0
+          test "$(docker run --rm --entrypoint id "$API_IMAGE" -u)" != 0
+          docker run --rm "$COLLECTOR_IMAGE" --help
+      - name: Check the API image answers from a migrated, empty archive
+        env:
+          GRIDCAST_DATABASE_URL: postgresql://gridcast@127.0.0.1:5432/gridcast
+          GRIDCAST_ALLOWED_ORIGIN: https://protonicwave.github.io
+        run: |
+          docker run --rm --network host -e GRIDCAST_DATABASE_URL --entrypoint gridcast-migrate "$API_IMAGE"
+          docker run --detach --name api --network host \
+            -e GRIDCAST_DATABASE_URL -e GRIDCAST_ALLOWED_ORIGIN "$API_IMAGE"
+          # curl exits non-zero until the server listens; any HTTP answer ends the wait.
+          for attempt in $(seq 20); do
+            status="$(curl --silent --max-time 5 --output body.json --write-out '%{http_code}' \
+              http://127.0.0.1:8000/regions/13/outlook)" && break
+            sleep 1
+          done
+          docker logs api
+          cat body.json
+          # This detail, unlike the unavailable one, means the archive was queried.
+          test "$status" = 503
+          grep --quiet 'no forecast has been archived' body.json
+      - name: Report the image sizes
+        run: |
+          docker image inspect "$COLLECTOR_IMAGE" --format 'collector image size {{.Size}} bytes'
+          docker image inspect "$API_IMAGE" --format 'api image size {{.Size}} bytes'
+      - name: Publish the images
         if: github.event_name != 'pull_request'
         env:
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REGISTRY_USER: ${{ github.actor }}
         run: |
           echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
-          docker push "$IMAGE"
+          docker push "$COLLECTOR_IMAGE"
+          docker push "$API_IMAGE"
+
+  deploy-api:
+    needs: image
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Point the API app at this commit's image
+        run: >-
+          az containerapp update --name ca-gridcast-api --resource-group rg-gridcast
+          --image "ghcr.io/protonicwave/gridcast-api:${{ github.sha }}"
+      - name: Wait for the new revision to serve London's outlook
+        env:
+          API_URL: ${{ vars.GRIDCAST_API_URL }}
+        run: |
+          # An old revision keeps answering 200 if the new one never becomes ready, so a 200 counts
+          # only once the newest revision is the ready one. A scaled-to-zero app becomes ready on a request.
+          for attempt in $(seq 12); do
+            status="$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}'               "$API_URL/regions/13/outlook")" || status=000
+            latest="$(az containerapp show --name ca-gridcast-api --resource-group rg-gridcast               --query properties.latestRevisionName --output tsv)"
+            ready="$(az containerapp show --name ca-gridcast-api --resource-group rg-gridcast               --query properties.latestReadyRevisionName --output tsv)"
+            echo "attempt $attempt: HTTP $status, newest revision $latest, ready revision $ready"
+            test "$status" = 200 && test "$latest" = "$ready" && exit 0
+            sleep 5
+          done
+          echo "the API did not answer 200 within the wait" >&2
+          exit 1
+
+  deploy-site:
+    # After the API, so the page never meets an older contract than the one it was built for.
+    needs: [site, deploy-api]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+        env:
+          VITE_GRIDCAST_API_URL: ${{ vars.GRIDCAST_API_URL }}
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: web/dist
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  smoke:
+    needs: deploy-site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx --no-install playwright install --with-deps chromium
+      - name: Check the live page draws the chart
+        env:
+          SITE_URL: ${{ needs.deploy-site.outputs.page_url }}
+        run: npm run smoke

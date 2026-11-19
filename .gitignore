@@ -12,3 +12,5 @@ htmlcov/
 .env
 node_modules/
 .terraform/
+coverage/
+test-results/

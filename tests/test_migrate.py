@@ -53,13 +53,11 @@ def collector_without_login(empty_database: str, monkeypatch: pytest.MonkeyPatch
 
 def test_applies_each_migration_once(empty_database: str) -> None:
     with psycopg.connect(empty_database) as connection:
-        assert apply_migrations(connection) == [
-            "0001_create_archive.sql",
-            "0002_national_feeds_and_views.sql",
-        ]
+        applied = apply_migrations(connection)
+        assert applied[:2] == ["0001_create_archive.sql", "0002_national_feeds_and_views.sql"]
         assert apply_migrations(connection) == []
         versions = connection.execute("select version from schema_migration").fetchall()
-    assert versions == [(1,), (2,)]
+    assert versions == [(version,) for version in range(1, len(applied) + 1)]
 
 
 def test_command_migrates_the_database_named_in_the_environment(

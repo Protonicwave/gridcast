@@ -1,5 +1,6 @@
-# The collector's Azure resources: a scheduled Container Apps job writing to a
-# PostgreSQL flexible server, and a manually started job that applies migrations.
+# Gridcast's Azure resources: a scheduled Container Apps job writing to a
+# PostgreSQL flexible server, a manually started job that applies migrations, and
+# the container app that serves each region's outlook from the archive.
 
 terraform {
   required_version = "~> 1.17"
@@ -46,6 +47,9 @@ locals {
   tls_parameters = "sslmode=verify-full&sslrootcert=system"
   admin_url      = "postgresql://${azurerm_postgresql_flexible_server.archive.administrator_login}:${random_password.admin.result}@${local.database_host}:5432/${local.database_name}?${local.tls_parameters}"
   collector_url  = "postgresql://gridcast_collector:${random_password.collector.result}@${local.database_host}:5432/${local.database_name}?${local.tls_parameters}"
+  reader_url     = "postgresql://gridcast_reader:${random_password.reader.result}@${local.database_host}:5432/${local.database_name}?${local.tls_parameters}"
+  # The GitHub Pages origin the site is served from: the one origin the API allows.
+  site_origin = "https://protonicwave.github.io"
 }
 
 resource "azurerm_resource_group" "gridcast" {
@@ -112,6 +116,11 @@ resource "random_password" "admin" {
 }
 
 resource "random_password" "collector" {
+  length  = 32
+  special = false
+}
+
+resource "random_password" "reader" {
   length  = 32
   special = false
 }
@@ -231,10 +240,17 @@ resource "azurerm_container_app_job" "migrate" {
     value = random_password.collector.result
   }
 
+  secret {
+    name  = "reader-password"
+    value = random_password.reader.result
+  }
+
   template {
     container {
-      name    = "migrate"
-      image   = var.collector_image
+      name = "migrate"
+      # The API image holds the same package as the collector's, so migrations ship
+      # with it and the collector's image need not change to apply them.
+      image   = var.api_image
       command = ["gridcast-migrate"]
       cpu     = 0.25
       memory  = "0.5Gi"
@@ -248,6 +264,92 @@ resource "azurerm_container_app_job" "migrate" {
         name        = "GRIDCAST_COLLECTOR_PASSWORD"
         secret_name = "collector-password"
       }
+
+      env {
+        name        = "GRIDCAST_READER_PASSWORD"
+        secret_name = "reader-password"
+      }
     }
   }
+}
+
+# Scales to zero when idle, so the first request after a quiet spell waits for a
+# replica to start; browsers and proxies cache each answer for a minute.
+resource "azurerm_container_app" "api" {
+  name                         = "ca-gridcast-api"
+  resource_group_name          = azurerm_resource_group.gridcast.name
+  container_app_environment_id = azapi_resource.environment.id
+  workload_profile_name        = "Consumption"
+  revision_mode                = "Single"
+
+  secret {
+    name  = "database-url"
+    value = local.reader_url
+  }
+
+  ingress {
+    external_enabled = true
+    target_port      = 8000
+
+    traffic_weight {
+      latest_revision = true
+      percentage      = 100
+    }
+  }
+
+  template {
+    min_replicas = 0
+    max_replicas = 2
+
+    container {
+      name   = "api"
+      image  = var.api_image
+      cpu    = 0.25
+      memory = "0.5Gi"
+
+      env {
+        name        = "GRIDCAST_DATABASE_URL"
+        secret_name = "database-url"
+      }
+
+      env {
+        name  = "GRIDCAST_ALLOWED_ORIGIN"
+        value = local.site_origin
+      }
+    }
+  }
+
+  lifecycle {
+    # CI deploys each image from main with az containerapp update; this sets only
+    # the first one.
+    ignore_changes = [template[0].container[0].image]
+  }
+}
+
+# CI deploys the API's image from main. It exchanges a GitHub OIDC token for this
+# identity's, so GitHub stores no Azure secret that could leak or need rotating.
+resource "azurerm_user_assigned_identity" "deploy" {
+  name                = "id-gridcast-deploy"
+  location            = azurerm_resource_group.gridcast.location
+  resource_group_name = azurerm_resource_group.gridcast.name
+}
+
+# Only jobs running in the GitHub environment production get a token, so a
+# workflow on another branch or a fork's pull request cannot deploy.
+resource "azurerm_federated_identity_credential" "deploy" {
+  name                      = "github-production"
+  user_assigned_identity_id = azurerm_user_assigned_identity.deploy.id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = "https://token.actions.githubusercontent.com"
+  # The repository issues immutable subjects (owner and repository IDs), which survive a rename.
+  subject = "repo:Protonicwave@92551449/gridcast@1461439537:environment:production"
+}
+
+# Scoped to the API app, so the identity cannot touch the archive or the collector.
+# It can read the app's one secret, the read-only role's URL.
+resource "azurerm_role_assignment" "deploy_api" {
+  scope                = azurerm_container_app.api.id
+  role_definition_name = "Contributor"
+  principal_id         = azurerm_user_assigned_identity.deploy.principal_id
+  principal_type       = "ServicePrincipal"
 }

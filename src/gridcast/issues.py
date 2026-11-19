@@ -29,6 +29,15 @@ class Issue:
 
 
 @dataclass(frozen=True, slots=True)
+class StoredIssue:
+    """An archived issue with the time it was fetched, which is when it was issued."""
+
+    first_slot: datetime
+    intensities_g_per_kwh: tuple[int, ...]
+    fetched_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class Actual:
     """The measured national intensity of the half hour starting at `slot_start`.
 
