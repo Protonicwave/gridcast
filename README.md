@@ -2,15 +2,16 @@
 
 Gridcast tells each of the 14 regions of Great Britain when its electricity will be cleanest in the next 48 hours, and measures how good that advice is.
 
-This repository holds the collector, which archives NESO's Carbon Intensity forecast every half hour, and the interface mock-up: a static page built from a saved snapshot of that forecast.
+This repository holds the collector, which archives NESO's Carbon Intensity forecast every half hour, the API that serves a region's cleanest windows from that archive, the React site in `web/` that shows London's, and the interface mock-up the site was ported from.
 
 ## Install
 
-Needs Python 3.12 or later with [uv](https://docs.astral.sh/uv/), Node.js for the type check, and Docker for the local PostgreSQL the tests use.
+Needs Python 3.12 or later with [uv](https://docs.astral.sh/uv/), Node.js 22 or later, and Docker for the local PostgreSQL the tests use.
 
 ```sh
 uv sync
 npm install
+npm ci --prefix web
 ```
 
 ## Configure
@@ -47,6 +48,14 @@ curl http://127.0.0.1:8000/regions/13/outlook
 
 `/regions/<1 to 14>/outlook` answers 404 for another number, 422 for a value that is not an integer, and 503 when the archive holds no usable forecast or cannot be read.
 
+Serve the site against that API. The dev server forwards `/regions` to `127.0.0.1:8000`, so no cross-origin setting is needed:
+
+```sh
+npm --prefix web run dev
+```
+
+For a build that calls a deployed API instead, set `VITE_GRIDCAST_API_URL` to its origin: `VITE_GRIDCAST_API_URL=<origin> npm --prefix web run build`. The page fetches the outlook on load and again when it becomes visible after ten minutes. It abandons a request after 10 seconds, so after a cold start the first visitor can see the unavailable state with a retry button.
+
 Open `mockup/mockup.html` in a browser. The postcode lookup calls NESO's Carbon Intensity API, so it needs a network connection; everything else works offline.
 
 To rebuild the page's data from the files in `data/`:
@@ -68,7 +77,7 @@ docker run --rm -p 127.0.0.1:8000:8000 -e GRIDCAST_DATABASE_URL -e GRIDCAST_ALLO
 
 Inside a container, `127.0.0.1` is the container itself: point `GRIDCAST_DATABASE_URL` at the local database through the compose network (`--network gridcast_default` and host `db`).
 
-On each pull request, GitHub Actions runs the checks below, builds both images and checks the API image answers from a freshly migrated archive. On `main` it also pushes `ghcr.io/protonicwave/gridcast-collector:<commit sha>` and `ghcr.io/protonicwave/gridcast-api:<commit sha>`. To publish a branch's images before merging it, run `gh workflow run ci --ref <branch>`.
+On each pull request, GitHub Actions runs the checks below, builds both images and checks the API image answers from a freshly migrated archive. On `main` it also pushes `ghcr.io/protonicwave/gridcast-collector:<commit sha>` and `ghcr.io/protonicwave/gridcast-api:<commit sha>`. To run the whole pipeline, deployment included, for a branch before merging it, run `gh workflow run ci --ref <branch>`.
 
 ## Deploy
 
@@ -108,6 +117,25 @@ The API's budget is a median under 500 ms for London's outlook over 20 warm requ
 ```sh
 uv run python scripts/time_outlook.py "$(terraform -chdir=infra output -raw api_url)"
 ```
+
+## Site
+
+The site is published to GitHub Pages at `https://protonicwave.github.io/gridcast/`. On `main`, after the gates and the image publish, CI runs three jobs in order:
+
+1. `deploy-api` signs in to Azure as the deploy identity, points `ca-gridcast-api` at the commit's image and waits for London's outlook to answer 200.
+2. `deploy-site` builds the site with the API's origin and publishes it.
+3. `smoke` runs `npm --prefix web run smoke`, a Playwright test that opens the published page and expects London's answer and a drawn series. Run it by hand with `SITE_URL=<page url> npm --prefix web run smoke` after `npx playwright install chromium`.
+
+The jobs need configuration in the repository, set once:
+
+- Pages with its source set to GitHub Actions.
+- Environments `production`, which holds the variables below and is the subject the Azure identity trusts, and `github-pages`.
+- Variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` on `production`, from `terraform -chdir=infra output deploy_client_id`, `tenant_id` and `subscription_id`.
+- Repository variable `GRIDCAST_API_URL`, from `terraform -chdir=infra output api_url`.
+
+The API's origin is built into the page, and the API allows only the Pages origin, so a custom domain needs `GRIDCAST_ALLOWED_ORIGIN` changed in `infra/` as well.
+
+Budgets for the page: the compressed script at most 75 KiB, and on Lighthouse mobile an LCP of at most 2.5 s and a CLS of at most 0.1. `npm --prefix web run build` prints the script's gzipped size.
 
 ## Monitor
 
@@ -165,6 +193,10 @@ uv run mypy
 uv run vulture src --min-confidence 80
 uv run sqlfluff lint src/gridcast/migrations
 npm run typecheck
+npm --prefix web run test
+npm --prefix web run lint
+npm --prefix web run typecheck
+npm --prefix web run knip
 ```
 
 ## Data
