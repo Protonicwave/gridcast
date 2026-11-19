@@ -325,3 +325,30 @@ resource "azurerm_container_app" "api" {
     ignore_changes = [template[0].container[0].image]
   }
 }
+
+# CI deploys the API's image from main. It exchanges a GitHub OIDC token for this
+# identity's, so GitHub stores no Azure secret that could leak or need rotating.
+resource "azurerm_user_assigned_identity" "deploy" {
+  name                = "id-gridcast-deploy"
+  location            = azurerm_resource_group.gridcast.location
+  resource_group_name = azurerm_resource_group.gridcast.name
+}
+
+# Only jobs running in the GitHub environment production get a token, so a
+# workflow on another branch or a fork's pull request cannot deploy.
+resource "azurerm_federated_identity_credential" "deploy" {
+  name                      = "github-production"
+  user_assigned_identity_id = azurerm_user_assigned_identity.deploy.id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = "https://token.actions.githubusercontent.com"
+  subject                   = "repo:Protonicwave/gridcast:environment:production"
+}
+
+# Scoped to the API app, so the identity cannot touch the archive or the collector.
+# It can read the app's one secret, the read-only role's URL.
+resource "azurerm_role_assignment" "deploy_api" {
+  scope                = azurerm_container_app.api.id
+  role_definition_name = "Contributor"
+  principal_id         = azurerm_user_assigned_identity.deploy.principal_id
+  principal_type       = "ServicePrincipal"
+}
