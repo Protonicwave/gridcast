@@ -12,6 +12,7 @@ export default defineConfig({
   server: { host: "127.0.0.1", proxy: { "/regions": LOCAL_API_URL } },
   preview: { host: "127.0.0.1" },
   test: {
+    exclude: ["e2e/**", "node_modules/**"],
     environment: "jsdom",
     setupFiles: ["./src/testSetup.ts"],
     restoreMocks: true,
