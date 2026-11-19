@@ -57,12 +57,16 @@ uv run gridcast-snapshot --fetched-at 2026-11-17T11:50Z data/regional_fw48h_2026
 
 ## Image
 
-The collector job runs from `Dockerfile`, which installs the locked runtime dependencies and runs `gridcast-collect` as an unprivileged user:
+`Dockerfile` installs the locked runtime dependencies and builds two images that run as an unprivileged user. The default target, `collector`, runs `gridcast-collect`; the `api` target serves the outlook on port 8000:
 
 ```sh
 docker build -t gridcast-collector .
 docker run --rm -e GRIDCAST_DATABASE_URL gridcast-collector
+docker build --target api -t gridcast-api .
+docker run --rm -p 127.0.0.1:8000:8000 -e GRIDCAST_DATABASE_URL -e GRIDCAST_ALLOWED_ORIGIN gridcast-api
 ```
+
+Inside a container, `127.0.0.1` is the container itself: point `GRIDCAST_DATABASE_URL` at the local database through the compose network (`--network gridcast_default` and host `db`).
 
 On each pull request, GitHub Actions runs the checks below and builds the image. On `main` it also pushes `ghcr.io/protonicwave/gridcast-collector:<commit sha>`. To publish a branch's image before merging it, run `gh workflow run ci --ref <branch>`.
 
