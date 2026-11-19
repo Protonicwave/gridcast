@@ -1,0 +1,134 @@
+@font-face {
+  font-family: "Source Sans 3";
+  src: url("/fonts/source-sans-3-latin.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+/* Metric-matched fallback so the swap to the web font does not move the layout. */
+@font-face {
+  font-family: "Source Sans 3 fallback";
+  src: local("Arial");
+  size-adjust: 93%;
+  ascent-override: 110%;
+  descent-override: 31%;
+}
+
+:root {
+  color-scheme: light dark;
+
+  /* Neutrals tinted toward the Prussian blue of the Gridcast project document. */
+  --n-1: oklch(0.985 0.003 250);
+  --n-3: oklch(0.945 0.007 250);
+  --n-6: oklch(0.872 0.010 250);
+  --n-7: oklch(0.800 0.012 250);
+  --n-11: oklch(0.455 0.018 250);
+  --n-12: oklch(0.235 0.020 250);
+
+  --accent: oklch(0.400 0.085 250);
+  --accent-hover: oklch(0.460 0.090 250);
+  --accent-wash: oklch(0.400 0.085 250 / 0.13);
+  --focus: oklch(0.520 0.140 250);
+
+  --warning-ink: oklch(0.420 0.100 60);
+  --warning-wash: oklch(0.950 0.040 80);
+  --danger-ink: oklch(0.450 0.140 28);
+  --danger-wash: oklch(0.955 0.030 28);
+
+  --halo: var(--n-1);
+
+  --font-text: "Source Sans 3", "Source Sans 3 fallback", sans-serif;
+
+  --step--1: 0.9375rem;
+  --step-0: 1.0625rem;
+  --step-1: clamp(1.25rem, 1.18rem + 0.3vw, 1.4rem);
+  --step-2: clamp(1.5rem, 1.33rem + 0.7vw, 1.875rem);
+  --step-4: clamp(2.125rem, 1.6rem + 2.3vw, 3.5rem);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  --radius-control: 6px;
+  --radius-panel: 10px;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-1: 120ms;
+
+  --page-max: 1240px;
+  --content-max: 720px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --n-1: oklch(0.190 0.012 250);
+    --n-3: oklch(0.250 0.014 250);
+    --n-6: oklch(0.340 0.016 250);
+    --n-7: oklch(0.420 0.018 250);
+    --n-11: oklch(0.760 0.014 250);
+    --n-12: oklch(0.945 0.006 250);
+
+    --accent: oklch(0.760 0.090 250);
+    --accent-hover: oklch(0.820 0.080 250);
+    --accent-wash: oklch(0.760 0.090 250 / 0.16);
+    --focus: oklch(0.780 0.120 250);
+
+    --warning-ink: oklch(0.850 0.100 80);
+    --warning-wash: oklch(0.300 0.050 70);
+    --danger-ink: oklch(0.820 0.100 28);
+    --danger-wash: oklch(0.300 0.060 28);
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--n-1);
+  color: var(--n-12);
+  font-family: var(--font-text);
+  font-size: var(--step-0);
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+h1, h2, h3 { margin: 0; line-height: 1.15; text-wrap: balance; }
+h1 { font-size: var(--step-4); font-weight: 650; letter-spacing: -0.02em; line-height: 1.05; }
+h2 { font-size: var(--step-1); font-weight: 650; letter-spacing: -0.01em; }
+p { margin: 0; text-wrap: pretty; }
+a { color: var(--accent); text-underline-offset: 0.15em; }
+a:hover { color: var(--accent-hover); }
+.nowrap { white-space: nowrap; }
+
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+
+.site-header { border-bottom: 1px solid var(--n-6); }
+.site-header__inner {
+  max-width: var(--page-max); margin: 0 auto; padding: 0 var(--space-4);
+  display: flex; align-items: center; min-height: 56px;
+}
+.wordmark { font-weight: 700; font-size: var(--step-1); letter-spacing: -0.015em; color: var(--n-12); text-decoration: none; }
+.wordmark:hover { color: var(--n-12); }
+
+main { max-width: var(--page-max); margin: 0 auto; padding: var(--space-5) var(--space-4) var(--space-8); }
+.forecast { max-width: var(--content-max); }
+
+.answer { display: grid; gap: var(--space-3); margin-bottom: var(--space-6); }
+.answer__label { font-weight: 600; color: var(--n-11); }
+.answer__detail { font-size: var(--step-1); line-height: 1.35; max-width: 42ch; }
+.answer__detail strong { font-weight: 650; }
+
+.site-footer { border-top: 1px solid var(--n-6); }
+.site-footer__inner { max-width: var(--page-max); margin: 0 auto; padding: var(--space-5) var(--space-4) var(--space-7); font-size: var(--step--1); color: var(--n-11); display: grid; gap: var(--space-2); }
+.site-footer p { max-width: 90ch; }
+
+@media (max-width: 420px) {
+  .wordmark { font-size: var(--step-0); }
+}
