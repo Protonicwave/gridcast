@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
-  # Publishes a branch's image, so it can be deployed before it is merged.
+  # Runs the whole pipeline, deployment included, for the branch it is started on.
   workflow_dispatch:
 
 permissions:
@@ -140,3 +140,36 @@ jobs:
           echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
           docker push "$COLLECTOR_IMAGE"
           docker push "$API_IMAGE"
+
+  deploy-api:
+    needs: image
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Point the API app at this commit's image
+        run: >-
+          az containerapp update --name ca-gridcast-api --resource-group rg-gridcast
+          --image "ghcr.io/protonicwave/gridcast-api:${{ github.sha }}"
+      - name: Wait for the new revision to serve London's outlook
+        env:
+          API_URL: ${{ vars.GRIDCAST_API_URL }}
+        run: |
+          # The app scales to zero, so the first request waits for a cold start of up to a minute.
+          for attempt in $(seq 12); do
+            status="$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}'               "$API_URL/regions/13/outlook")" || status=000
+            echo "attempt $attempt: HTTP $status"
+            test "$status" = 200 && exit 0
+            sleep 5
+          done
+          echo "the API did not answer 200 within the wait" >&2
+          exit 1
