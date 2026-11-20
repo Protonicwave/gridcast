@@ -16,7 +16,6 @@ function validBody(): Body {
     bands: BAND_EDGES.map(([fromHours, toHours], index) => ({
       fromHours,
       toHours,
-      pairs: 4000 + index,
       maeGPerKwh: 8 + index,
       interval: { low: 7 + index, high: 9 + index },
     })),
@@ -67,11 +66,11 @@ it("reads the bands, the difference and the days", async () => {
   const accuracy = await fetchIt();
   expect(fake.mock.calls[0]?.[0]).toBe("https://api.example/accuracy/national");
   expect(accuracy.until).toBe("2026-11-28");
-  expect(accuracy.bands.map((band) => [band.fromHours, band.toHours, band.pairs])).toEqual([
-    [1, 6, 4000],
-    [6, 12, 4001],
-    [12, 24, 4002],
-    [24, 48, 4003],
+  expect(accuracy.bands.map((band) => [band.fromHours, band.toHours])).toEqual([
+    [1, 6],
+    [6, 12],
+    [12, 24],
+    [24, 48],
   ]);
   expect(accuracy.bands[3]?.estimate).toEqual({ maeGPerKwh: 11, interval: { low: 10, high: 12 } });
   expect(accuracy.difference).toEqual({ maeGPerKwh: 3, interval: { low: 1.5, high: 4.5 } });
@@ -82,7 +81,7 @@ it("reads the bands, the difference and the days", async () => {
 it("accepts null figures and intervals when there are too few days", async () => {
   respondWith(
     bodyWith((body) => {
-      body["bands"] = BAND_EDGES.map(([fromHours, toHours]) => ({ fromHours, toHours, pairs: 0, maeGPerKwh: null, interval: null }));
+      body["bands"] = BAND_EDGES.map(([fromHours, toHours]) => ({ fromHours, toHours, maeGPerKwh: null, interval: null }));
       body["difference"] = { maeGPerKwh: null, interval: null };
       body["days"] = { usable: [], excluded: [] };
     }),
@@ -144,13 +143,12 @@ const TOO_MANY_DAYS = Array.from({ length: 401 }, () => "2026-11-21");
 
 it.each<[string, () => unknown, string]>([
   ["a body that is not an object", () => [], "expected the accuracy to be an object, got array"],
+  ["an impossible until", () => bodyWith((body) => { body["until"] = "2026-02-30"; }), 'expected until to be a date such as 2026-11-28, got "2026-02-30"'],
   ["a malformed until", () => bodyWith((body) => { body["until"] = "28/11/2026"; }), 'expected until to be a date such as 2026-11-28, got "28/11/2026"'],
   ["no bands", () => bodyWith((body) => { body["bands"] = []; }), "expected 4 bands, got 0 bands"],
   ["bands that are not a list", () => bodyWith((body) => { body["bands"] = "none"; }), 'expected 4 bands, got "none"'],
   ["a band that is not an object", () => bodyWith((body) => { (body["bands"] as unknown[])[1] = 3; }), "expected bands[1] to be an object, got 3"],
   ["a band over the wrong hours", () => withBand(2, { toHours: 30 }), "expected bands[2] to span 12 to 24 hours, got 12 to 30"],
-  ["a negative pair count", () => withBand(0, { pairs: -1 }), "expected bands[0].pairs to be a whole number of pairs, got -1"],
-  ["a fractional pair count", () => withBand(0, { pairs: 2.5 }), "expected bands[0].pairs to be a whole number of pairs, got 2.5"],
   ["a negative error", () => withBand(0, { maeGPerKwh: -1 }), "expected bands[0].maeGPerKwh to be null or a non-negative number of g per kWh, got -1"],
   ["a text error", () => withBand(0, { maeGPerKwh: "8" }), 'expected bands[0].maeGPerKwh to be null or a non-negative number of g per kWh, got "8"'],
   ["an interval that is not an object", () => withBand(3, { interval: 5 }), "expected bands[3].interval to be null or an object, got 5"],

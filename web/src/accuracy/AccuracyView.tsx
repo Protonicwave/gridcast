@@ -2,7 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { AccuracyUnavailableError, type BandAccuracy, type Estimate, fetchAccuracy, type Interval, type NationalAccuracy } from "./accuracyApi";
 import { PILOT } from "./pilot";
 
-/** The week of the 12-week plan in which H2 is decided; the running figures stop being provisional then. */
+/** The week, counting from the first of the project's twelve, in which H2 is decided. */
 const H2_DUE_WEEK = 6;
 /** Fewest usable days for which the API reports an interval. */
 const MIN_DAYS_FOR_INTERVAL = 7;
@@ -262,7 +262,10 @@ function HypothesesSection() {
   return (
     <div className="section">
       <h2>Four tests, fixed before the data</h2>
-      <p className="prose">Each claim was written down with the result that would disprove it before any of the data that tests it existed.</p>
+      <p className="prose">
+        Each claim was written down with the result that would disprove it before any of the data that tests it existed. Week 1 of the 12 began on
+        Monday 16 November 2026.
+      </p>
       <ol className="hypotheses">
         {HYPOTHESES.map((hypothesis) => (
           <li key={hypothesis.id}>

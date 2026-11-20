@@ -56,3 +56,16 @@ it("treats an unknown hash as the forecast", () => {
   render(<App apiBaseUrl="" />);
   expect(navLinks()[0]).toEqual(["Forecast", "page"]);
 });
+
+it("tells the visitor to reload when the accuracy page cannot be fetched", async () => {
+  vi.resetModules();
+  vi.doMock("./accuracy/AccuracyView", () => {
+    throw new Error("the chunk could not be fetched");
+  });
+  vi.spyOn(console, "error").mockImplementation(() => undefined);
+  window.location.hash = "#accuracy";
+  const { App: FreshApp } = await import("./App");
+  render(<FreshApp apiBaseUrl="" />);
+  expect((await screen.findByRole("status")).textContent).toContain("Reload the page to try again.");
+  vi.doUnmock("./accuracy/AccuracyView");
+});

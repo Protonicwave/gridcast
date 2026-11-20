@@ -14,7 +14,6 @@ export interface Estimate {
 export interface BandAccuracy {
   readonly fromHours: number;
   readonly toHours: number;
-  readonly pairs: number;
   readonly estimate: Estimate;
 }
 
@@ -41,7 +40,7 @@ export class AccuracyUnavailableError extends Error {
 }
 
 const FETCH_TIMEOUT_MS = 10_000;
-/** The API evaluates at most 120 days; a longer list is not from this endpoint. */
+/** The API evaluates at most 120 days; a list over three times that is not from this endpoint. */
 const MAX_DAYS = 400;
 const BAND_EDGES_HOURS = [
   [1, 6],
@@ -101,11 +100,9 @@ function parseBands(value: unknown): readonly BandAccuracy[] {
     const name = `bands[${String(index)}]`;
     const band = requireObject(value[index], name);
     if (band["fromHours"] !== fromHours || band["toHours"] !== toHours) {
-      fail(`${name} to span ${String(fromHours)} to ${String(toHours)} hours`, `${describe(band["fromHours"])} to ${describe(band["toHours"])}`, true);
+      failWith(`${name} to span ${String(fromHours)} to ${String(toHours)} hours`, `${describe(band["fromHours"])} to ${describe(band["toHours"])}`);
     }
-    const pairs = band["pairs"];
-    if (!Number.isInteger(pairs) || (pairs as number) < 0) fail(`${name}.pairs to be a whole number of pairs`, pairs);
-    return { fromHours, toHours, pairs: pairs as number, estimate: parseEstimate(band, name, true) };
+    return { fromHours, toHours, estimate: parseEstimate(band, name, true) };
   });
 }
 
@@ -125,7 +122,7 @@ function parseInterval(value: unknown, name: string): Interval {
   if (typeof value !== "object" || value === null || Array.isArray(value)) fail(`${name} to be null or an object`, value);
   const { low, high } = value as Fields;
   if (typeof low !== "number" || typeof high !== "number" || !Number.isFinite(low) || !Number.isFinite(high) || low > high) {
-    fail(`${name} to run from a low to a higher number`, `${describe(low)} to ${describe(high)}`, true);
+    failWith(`${name} to run from a low to a higher number`, `${describe(low)} to ${describe(high)}`);
   }
   return { low, high };
 }
@@ -147,9 +144,9 @@ function parseList(value: unknown, name: string): readonly unknown[] {
 }
 
 function parseDate(value: unknown, name: string): string {
-  if (typeof value !== "string" || !DATE_PATTERN.test(value) || Number.isNaN(Date.parse(value))) {
-    fail(`${name} to be a date such as 2026-11-28`, value);
-  }
+  // Date.parse rolls an impossible date such as 2026-02-30 over to the next month, so the date must survive a round trip.
+  const isRealDate = typeof value === "string" && DATE_PATTERN.test(value) && !Number.isNaN(Date.parse(value)) && new Date(`${value}T00:00Z`).toISOString().startsWith(value);
+  if (!isRealDate) fail(`${name} to be a date such as 2026-11-28`, value);
   return value;
 }
 
@@ -158,8 +155,12 @@ function requireObject(value: unknown, name: string): Fields {
   return value as Fields;
 }
 
-function fail(expected: string, got: unknown, alreadyDescribed = false): never {
-  throw new AccuracyUnavailableError(`expected ${expected}, got ${alreadyDescribed ? String(got) : describe(got)}`);
+function fail(expected: string, got: unknown): never {
+  failWith(expected, describe(got));
+}
+
+function failWith(expected: string, got: string): never {
+  throw new AccuracyUnavailableError(`expected ${expected}, got ${got}`);
 }
 
 function describe(value: unknown): string {

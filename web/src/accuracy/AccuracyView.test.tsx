@@ -17,7 +17,7 @@ function accuracyBody(overrides: Body = {}): Body {
     bands: EDGES.map(([fromHours, toHours], index) => ({
       fromHours,
       toHours,
-      pairs: 9000,
+      
       maeGPerKwh: 8 + index,
       interval: { low: 7.5 + index, high: 8.5 + index },
     })),
@@ -71,7 +71,7 @@ it.each([
 it("states the days measured so far, and no interval, when there are too few", async () => {
   serve(
     accuracyBody({
-      bands: EDGES.map(([fromHours, toHours]) => ({ fromHours, toHours, pairs: 100, maeGPerKwh: 9, interval: null })),
+      bands: EDGES.map(([fromHours, toHours]) => ({ fromHours, toHours, maeGPerKwh: 9, interval: null })),
       difference: { maeGPerKwh: 2, interval: null },
       days: { usable: ["2026-11-21", "2026-11-22", "2026-11-23"], excluded: [] },
     }),
@@ -86,7 +86,7 @@ it("states the days measured so far, and no interval, when there are too few", a
 it("says no full day has been measured when there are none", async () => {
   serve(
     accuracyBody({
-      bands: EDGES.map(([fromHours, toHours]) => ({ fromHours, toHours, pairs: 0, maeGPerKwh: null, interval: null })),
+      bands: EDGES.map(([fromHours, toHours]) => ({ fromHours, toHours, maeGPerKwh: null, interval: null })),
       difference: { maeGPerKwh: null, interval: null },
       days: { usable: [], excluded: [] },
     }),

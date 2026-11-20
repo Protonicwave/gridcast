@@ -71,7 +71,7 @@ function useView(): View {
 
 function AccuracyPage({ apiBaseUrl }: { readonly apiBaseUrl: string }) {
   return (
-    <ChunkBoundary what="the accuracy page" message="The accuracy page did not load. Try again in a few minutes.">
+    <ChunkBoundary what="the accuracy page" message="The accuracy page did not load. Reload the page to try again.">
       <Suspense fallback={<div className="accuracy" aria-busy="true" />}>
         <LazyAccuracyView apiBaseUrl={apiBaseUrl} />
       </Suspense>
