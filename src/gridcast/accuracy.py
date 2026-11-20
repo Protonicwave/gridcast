@@ -30,6 +30,8 @@ _SLOT_SECONDS = SLOT_MINUTES * 60
 _DAY_SECONDS = 86_400
 _HOUR_SECONDS = 3_600
 _MAX_HORIZON_HOURS = 48
+# A forecast for a day can be fetched up to this long before it starts.
+MAX_LEAD_TIME = timedelta(hours=_MAX_HORIZON_HOURS)
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
@@ -110,6 +112,16 @@ def horizon_band(issued_at: datetime, slot_start: datetime) -> Band | None:
     return None if position is None else BANDS[position]
 
 
+def evaluation_window(today: date, until: date | None = None) -> tuple[date, date]:
+    """The first UTC day evaluated and the day the evaluation stops before.
+
+    The window ends at `until` or `today`, whichever is earlier, so a day still under
+    way is never read, and spans at most MAX_DAYS_EVALUATED days.
+    """
+    end = today if until is None else min(until, today)
+    return end - timedelta(days=MAX_DAYS_EVALUATED), end
+
+
 def evaluate_national(
     issues: Iterable[StoredIssue],
     actuals: Mapping[datetime, int],
@@ -122,8 +134,7 @@ def evaluate_national(
     is used only when all its half hours have an actual and every band holds enough
     pairs; the others are listed with the reason.
     """
-    end = today if until is None else min(until, today)
-    start = end - timedelta(days=MAX_DAYS_EVALUATED)
+    start, end = evaluation_window(today, until)
     actual_by_epoch = {int(slot.timestamp()): value for slot, value in actuals.items()}
     tallies = _tally_pairs(issues, actual_by_epoch, start, end)
     actuals_per_day = _count_actuals_per_day(actual_by_epoch, start, end)
