@@ -273,8 +273,8 @@ resource "azurerm_container_app_job" "migrate" {
   }
 }
 
-# Scales to zero when idle, so the first request after a quiet spell waits for a
-# replica to start; browsers and proxies cache each answer for a minute.
+# Keeps one replica running, because a cold start took 42 s and the page gives up
+# after 10 s (about US$4 a month); browsers and proxies cache each answer for a minute.
 resource "azurerm_container_app" "api" {
   name                         = "ca-gridcast-api"
   resource_group_name          = azurerm_resource_group.gridcast.name
@@ -298,7 +298,7 @@ resource "azurerm_container_app" "api" {
   }
 
   template {
-    min_replicas = 0
+    min_replicas = 1
     max_replicas = 2
 
     container {
