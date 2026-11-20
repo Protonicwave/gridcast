@@ -6,6 +6,8 @@ import { rampColour } from "./chartGeometry";
 /** 15:10 on Thursday 19 November 2026, UK time. */
 const NOW_MS = Date.parse("2026-11-19T15:10Z");
 const SLOT_COUNT = 96;
+/** Playing to the end redraws the 14-region map 95 times, which takes several seconds on a CI runner under coverage. */
+const SLOW_TEST_TIMEOUT_MS = 30_000;
 
 /** Each region's series is flat at its id times ten, except Yorkshire, which dips at 02:00 so its timing matters. */
 function outlook(regionId: number, name: string): Record<string, unknown> {
@@ -254,14 +256,14 @@ it("stops where it is when paused", async () => {
 it("stops at the last half hour and plays again from the start", async () => {
   const slider = await renderLondonWithFakeTimers();
   fireEvent.click(playButton());
-  advance(PLAY_STEP_MS * 200);
+  advance(PLAY_STEP_MS * 100);
   expect(slider.getAttribute("aria-valuenow")).toBe("95");
   expect(playButton().textContent).toBe("Play the next 48 hours");
   fireEvent.click(playButton());
   expect(slider.getAttribute("aria-valuenow")).toBe("0");
   advance(PLAY_STEP_MS * 2);
   expect(slider.getAttribute("aria-valuenow")).toBe("2");
-});
+}, SLOW_TEST_TIMEOUT_MS);
 
 it("stops playing when the visitor moves the cursor", async () => {
   const slider = await renderLondonWithFakeTimers();
