@@ -47,7 +47,7 @@ jobs:
       - run: uv run coverage run --branch --source=gridcast -m pytest -q
       - run: >-
           uv run coverage report --show-missing --fail-under=100
-          --include="src/gridcast/issues.py,src/gridcast/archive.py,src/gridcast/outlook.py"
+          --include="src/gridcast/issues.py,src/gridcast/archive.py,src/gridcast/outlook.py,src/gridcast/accuracy.py"
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
