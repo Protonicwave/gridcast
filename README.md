@@ -151,7 +151,12 @@ CI deploys the API image but does not run migrations. Before merging a commit th
 
 The API's origin is built into the page, and the API allows only the Pages origin, so a custom domain needs `GRIDCAST_ALLOWED_ORIGIN` changed in `infra/` as well.
 
-Budgets for the page: the compressed script at most 75 KiB, and on Lighthouse mobile an LCP of at most 2.5 s and a CLS of at most 0.1. `npm --prefix web run build` prints the script's gzipped size.
+Budgets for the page: compressed script of at most 80 KiB for the entry chunk, 16 KiB for the map's lazily loaded chunk and 110 KiB for all of it, and on Lighthouse mobile an LCP of at most 2.5 s and a CLS of at most 0.1. After a build, this reports each figure against its budget and exits 1 over one; CI runs it in the `site` job:
+
+```sh
+npm --prefix web run build
+python scripts/check_bundle.py web/dist
+```
 
 ## Monitor
 
