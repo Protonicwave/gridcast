@@ -37,11 +37,11 @@ function londonOutlook(overrides: Record<string, unknown> = {}): Record<string, 
   };
 }
 
-/** Fourteen outlooks, each region's the same as London's except for its id and name. */
+/** Fourteen outlooks, each region's the same as London's except for its id and name: the API gives every region the same half hours. */
 function everyRegion(london: Record<string, unknown>): Record<string, unknown>[] {
   return Array.from({ length: 14 }, (_, index) => {
     const regionId = index + 1;
-    return regionId === 13 ? london : { ...londonOutlook(), regionId, regionName: `Region ${String(regionId)}` };
+    return regionId === 13 ? london : { ...london, regionId, regionName: `Region ${String(regionId)}` };
   });
 }
 
