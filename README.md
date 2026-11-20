@@ -60,6 +60,12 @@ For a build that calls a deployed API instead, set `VITE_GRIDCAST_API_URL` to it
 
 Open `mockup/mockup.html` in a browser. The postcode lookup calls NESO's Carbon Intensity API, so it needs a network connection; everything else works offline.
 
+To rebuild the site's region shapes, `web/src/map/regionShapes.json`, from the boundary file:
+
+```sh
+uv run gridcast-map data/gb-dno-license-areas-20240503.geojson web/src/map/regionShapes.json
+```
+
 To rebuild the page's data from the files in `data/`:
 
 ```sh

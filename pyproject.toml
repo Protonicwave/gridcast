@@ -11,6 +11,7 @@ dependencies = [
 
 [project.scripts]
 gridcast-collect = "gridcast.collect:main"
+gridcast-map = "gridcast.boundaries:main"
 gridcast-migrate = "gridcast.migrate:main"
 gridcast-snapshot = "gridcast.snapshot:main"
 
