@@ -9,7 +9,7 @@ test.beforeAll(() => {
 });
 
 test("the live page draws London's answer and forecast chart", async ({ page }) => {
-  await page.goto("./");
+  await page.goto("./?region=13");
 
   // The loading state already has a heading, so the drawn series is what proves the forecast arrived.
   const series = page.locator("path.series");
