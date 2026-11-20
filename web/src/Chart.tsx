@@ -73,7 +73,6 @@ export function Chart({ outlook, heading, hours, choice, cursor, cursorValue, no
           <Cursor scales={scales} slot={cursor} gPerKwh={cursorValue} />
         </svg>
       </div>
-
     </>
   );
 }

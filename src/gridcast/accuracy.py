@@ -52,7 +52,6 @@ class Band:
 
 
 BANDS = (Band(1, 6), Band(6, 12), Band(12, 24), Band(24, _MAX_HORIZON_HOURS))
-_BAND_POSITION = {band: position for position, band in enumerate(BANDS)}
 _LAST_BAND = len(BANDS) - 1
 
 

@@ -54,9 +54,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         *((source, sizes.get(source), budget) for source, budget in CHUNK_BUDGETS_KIB.items()),
         ("total", sum(sizes.values()), TOTAL_BUDGET_KIB),
     ]
-    lines = [_report_line(label, kib, budget) for label, kib, budget in checks]
-    print("\n".join(lines))
-    return 0 if all(": ok, " in line for line in lines) else EXIT_OVER_BUDGET
+    print("\n".join(_report_line(label, kib, budget) for label, kib, budget in checks))
+    within_budget = all(kib is not None and kib <= budget for _, kib, budget in checks)
+    return 0 if within_budget else EXIT_OVER_BUDGET
 
 
 def _read_manifest(dist: Path) -> Mapping[str, Mapping[str, Any]]:
