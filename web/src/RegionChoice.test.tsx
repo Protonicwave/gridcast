@@ -285,3 +285,20 @@ it("keeps playing when another region is chosen", async () => {
   expect(slider.isConnected).toBe(false);
   expect(playButton().textContent).toBe("Pause");
 });
+
+it("abandons a lookup still running when the next postcode is rejected", async () => {
+  stubNetwork((): Promise<Response> => new Promise<Response>(() => undefined));
+  const fake = vi.mocked(fetch);
+  renderApp();
+  await screen.findByRole("heading", { level: 1 });
+  fireEvent.change(screen.getByLabelText("Your postcode"), { target: { value: "BS1" } });
+  fireEvent.click(screen.getByRole("button", { name: /Find|Finding/ }));
+  await waitFor(() => {
+    expect(fake.mock.calls.some(([url]) => urlOf(url).includes("postcode"))).toBe(true);
+  });
+  const firstSignal = fake.mock.calls.find(([url]) => urlOf(url).includes("postcode"))?.[1]?.signal;
+  fireEvent.change(screen.getByLabelText("Your postcode"), { target: { value: "BT1 1AA" } });
+  fireEvent.click(screen.getByRole("button", { name: /Find|Finding/ }));
+  expect((await screen.findByRole("alert")).textContent).toContain("Northern Ireland");
+  expect(firstSignal?.aborted).toBe(true);
+});

@@ -50,6 +50,8 @@ function usePostcodeLookup(onRegion: (regionId: number) => void) {
   const running = useRef<AbortController | null>(null);
 
   const find = async (input: string) => {
+    // Even a postcode that is rejected abandons the lookup before it, so that one cannot answer over the message.
+    running.current?.abort();
     let outward: string;
     try {
       outward = outwardCode(input);
@@ -58,7 +60,6 @@ function usePostcodeLookup(onRegion: (regionId: number) => void) {
       setMessage(error.message);
       return;
     }
-    running.current?.abort();
     const lookup = new AbortController();
     running.current = lookup;
     setMessage("");
