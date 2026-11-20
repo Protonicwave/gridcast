@@ -120,10 +120,10 @@ The API's budget is a median under 500 ms for London's outlook over 20 warm requ
 uv run python scripts/time_outlook.py "$(terraform -chdir=infra output -raw api_url)"
 ```
 
-`--path` times another path and `--budget-ms` sets its limit. The accuracy endpoint's budget is a median under 1000 ms:
+`--path` times another path (written without its leading slash, which Git Bash would rewrite) and `--budget-ms` sets its limit. The accuracy endpoint's budget is a median under 1000 ms:
 
 ```sh
-uv run python scripts/time_outlook.py "$(terraform -chdir=infra output -raw api_url)" --path /accuracy/national --budget-ms 1000
+uv run python scripts/time_outlook.py "$(terraform -chdir=infra output -raw api_url)" --path accuracy/national --budget-ms 1000
 ```
 
 ## Site
@@ -194,7 +194,7 @@ az containerapp job start --name caj-gridcast-collect --resource-group rg-gridca
 
 ## Test
 
-The suite needs the local database running (`docker compose up -d --wait db`).
+The suite needs the local database. A bare `pytest` starts it, and Docker Desktop on Windows, when it is down; elsewhere run `docker compose up -d --wait db` first.
 
 ```sh
 uv run pytest
