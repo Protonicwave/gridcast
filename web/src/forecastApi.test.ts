@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { fetchOutlook, OutlookUnavailableError } from "./forecastApi";
+import { fetchOutlooks, OutlookUnavailableError } from "./forecastApi";
 
 const LONDON_ID = 13;
 const SIXTY_SLOTS = Array.from({ length: 60 }, (_, i) => 200 - i);
@@ -17,6 +17,14 @@ function validBody(): Record<string, unknown> {
       "3": { cleanest: { start: 54, mean: 143.5 }, dirtiest: { start: 0, mean: 197.5 }, timingMatters: false },
     },
   };
+}
+
+/** Fourteen outlooks, each region's the same as London's except for its id and name. */
+function allRegions(london: unknown): unknown[] {
+  return Array.from({ length: 14 }, (_, index) => {
+    const regionId = index + 1;
+    return regionId === LONDON_ID ? london : { ...validBody(), regionId, regionName: `Region ${String(regionId)}` };
+  });
 }
 
 function stubFetch(respond: () => Promise<Response>) {
@@ -38,19 +46,40 @@ async function failureMessage(promise: Promise<unknown>): Promise<string> {
   return error.message;
 }
 
-function fetchLondon(signal = new AbortController().signal) {
-  return fetchOutlook("https://api.example", LONDON_ID, signal);
+async function fetchLondon(signal = new AbortController().signal) {
+  const london = (await fetchOutlooks("https://api.example", signal)).get(LONDON_ID);
+  if (london === undefined) throw new Error("expected an outlook for London");
+  return london;
 }
 
-it("requests the region's outlook from the API", async () => {
-  respondWith(validBody());
+it("requests every region's outlook from the API", async () => {
+  respondWith(allRegions(validBody()));
   await fetchLondon();
   const fake = vi.mocked(fetch);
-  expect(fake.mock.calls[0]?.[0]).toBe("https://api.example/regions/13/outlook");
+  expect(fake.mock.calls[0]?.[0]).toBe("https://api.example/regions/outlook");
+});
+
+it("returns the 14 outlooks by region id", async () => {
+  respondWith(allRegions(validBody()));
+  const outlooks = await fetchOutlooks("https://api.example", new AbortController().signal);
+  expect([...outlooks.keys()]).toEqual(Array.from({ length: 14 }, (_, index) => index + 1));
+  expect(outlooks.get(4)?.regionName).toBe("Region 4");
+  expect(outlooks.get(4)?.regionId).toBe(4);
+});
+
+it.each([
+  ["an object", () => ({}), "expected 14 outlooks, got {}"],
+  ["null", () => null, "expected 14 outlooks, got null"],
+  ["13 outlooks", () => allRegions(validBody()).slice(1), "expected 14 outlooks, got 13 outlooks"],
+  ["15 outlooks", () => [...allRegions(validBody()), validBody()], "expected 14 outlooks, got 15 outlooks"],
+  ["outlooks out of order", () => allRegions(validBody()).reverse(), "expected regionId 1, got 14"],
+])("rejects %s, naming the value", async (_case, body, message) => {
+  respondWith(body());
+  expect(await failureMessage(fetchLondon())).toBe(message);
 });
 
 it("parses a valid payload into times, slots and windows", async () => {
-  respondWith(validBody());
+  respondWith(allRegions(validBody()));
   const outlook = await fetchLondon();
   expect(outlook.regionName).toBe("London");
   expect(outlook.fetchedAtMs).toBe(Date.parse("2026-11-19T14:05:12Z"));
@@ -92,18 +121,18 @@ it.each([
   ["a textual mean", (b: Record<string, unknown>) => ({ ...b, windows: { "1": { cleanest: { start: 0, mean: "96" }, dirtiest: { start: 0, mean: 1 }, timingMatters: true } } }), 'expected windows["1"].cleanest.mean to be a non-negative number of g per kWh, got "96"'],
   ["a textual verdict", (b: Record<string, unknown>) => ({ ...b, windows: { "1": { cleanest: { start: 0, mean: 1 }, dirtiest: { start: 0, mean: 1 }, timingMatters: "yes" } } }), 'expected windows["1"].timingMatters to be true or false, got "yes"'],
 ])("rejects %s, naming the value", async (_case, change, message) => {
-  respondWith(change(validBody()));
+  respondWith(allRegions(change(validBody())));
   expect(await failureMessage(fetchLondon())).toBe(message);
 });
 
 it("rejects a response other than 200, naming the status", async () => {
   respondWith({ detail: "the forecast archive is unavailable" }, 503);
-  expect(await failureMessage(fetchLondon())).toBe("expected HTTP 200 from https://api.example/regions/13/outlook, got 503");
+  expect(await failureMessage(fetchLondon())).toBe("expected HTTP 200 from https://api.example/regions/outlook, got 503");
 });
 
 it("rejects a body that is not JSON", async () => {
   stubFetch(() => Promise.resolve(new Response("<html>", { status: 200 })));
-  expect(await failureMessage(fetchLondon())).toBe("expected JSON from https://api.example/regions/13/outlook");
+  expect(await failureMessage(fetchLondon())).toBe("expected JSON from https://api.example/regions/outlook");
 });
 
 it("reports a network failure as unavailable, keeping the cause", async () => {
@@ -111,7 +140,7 @@ it("reports a network failure as unavailable, keeping the cause", async () => {
   stubFetch(() => Promise.reject(cause));
   const error: unknown = await fetchLondon().catch((reason: unknown) => reason);
   expect(error).toBeInstanceOf(OutlookUnavailableError);
-  expect((error as OutlookUnavailableError).message).toBe("could not reach https://api.example/regions/13/outlook");
+  expect((error as OutlookUnavailableError).message).toBe("could not reach https://api.example/regions/outlook");
   expect((error as OutlookUnavailableError).cause).toBe(cause);
 });
 
