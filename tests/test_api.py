@@ -46,6 +46,30 @@ def test_serves_the_outlook_in_the_documented_shape(stored_url: str) -> None:
     }
 
 
+def test_serves_every_region_in_id_order_with_the_single_region_body(stored_url: str) -> None:
+    client = client_for(stored_url)
+    response = client.get("/regions/outlook")
+    assert response.status_code == 200
+    bodies = response.json()
+    assert [body["regionId"] for body in bodies] == list(range(1, 15))
+    assert bodies[12] == client.get("/regions/13/outlook").json()
+    assert response.headers["cache-control"] == "public, max-age=60"
+
+
+def test_refuses_all_regions_when_one_has_no_forecast(archive: Archive) -> None:
+    store(archive, OK, None, slots=12)
+    archive.execute("delete from forecast_issue where area_id = 5")
+    archive.commit()
+    response = client_for(archive.info.dsn).get("/regions/outlook")
+    assert response.status_code == 503
+    assert "[5]" in response.json()["detail"]
+
+
+def test_refuses_all_regions_when_one_has_no_half_hour_left(stored_url: str) -> None:
+    response = client_for(stored_url, FIRST_SLOT + timedelta(hours=7)).get("/regions/outlook")
+    assert response.status_code == 503
+
+
 def test_lets_browsers_and_proxies_cache_for_a_minute(stored_url: str) -> None:
     response = client_for(stored_url).get("/regions/13/outlook")
     assert response.headers["cache-control"] == "public, max-age=60"

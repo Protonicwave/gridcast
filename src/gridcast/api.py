@@ -22,6 +22,7 @@ from gridcast.archive import (
     CONNECT_TIMEOUT_SECONDS,
     DATABASE_URL_VARIABLE,
     latest_issue,
+    latest_issues,
     national_actuals,
     national_issues,
 )
@@ -67,6 +68,25 @@ def create_app(
             raise HTTPException(503, "the newest forecast has no half hour left")
         response.headers["Cache-Control"] = f"public, max-age={CACHE_MAX_AGE_SECONDS}"
         return _outlook_body(outlook)
+
+    @app.get("/regions/outlook")
+    def all_outlooks(response: Response) -> list[dict[str, Any]]:
+        with _archive_connection(database_url) as connection:
+            issues = latest_issues(connection)
+        current = now()
+        outlooks: list[Outlook] = []
+        missing: list[int] = []
+        for region in REGIONS:
+            issue = issues.get(region.api_id)
+            outlook = None if issue is None else build_outlook(region, issue, current)
+            if outlook is None:
+                missing.append(region.api_id)
+            else:
+                outlooks.append(outlook)
+        if missing:
+            raise HTTPException(503, f"no current forecast for regions {missing}")
+        response.headers["Cache-Control"] = f"public, max-age={CACHE_MAX_AGE_SECONDS}"
+        return [_outlook_body(outlook) for outlook in outlooks]
 
     @app.get("/accuracy/national")
     def national_accuracy(
