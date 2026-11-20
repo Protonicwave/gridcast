@@ -68,6 +68,21 @@ def latest_issue(connection: psycopg.Connection[Any], area_id: int) -> StoredIss
     return StoredIssue(first_slot, tuple(intensities), fetched_at)
 
 
+def latest_issues(connection: psycopg.Connection[Any]) -> dict[int, StoredIssue]:
+    """The regional issue with the latest first slot of every area that has one, by area id."""
+    rows = connection.execute(
+        "select distinct on (issue.area_id) issue.area_id, issue.first_slot,"
+        " issue.intensities_g_per_kwh, api_fetch.fetched_at"
+        " from forecast_issue as issue inner join api_fetch on issue.fetch_id = api_fetch.fetch_id"
+        " where issue.feed = 'regional'"
+        " order by issue.area_id, issue.first_slot desc"
+    ).fetchall()
+    return {
+        area_id: StoredIssue(first_slot, tuple(intensities), fetched_at)
+        for area_id, first_slot, intensities, fetched_at in rows
+    }
+
+
 def national_issues(
     connection: psycopg.Connection[Any], since: datetime, until: datetime
 ) -> list[StoredIssue]:
