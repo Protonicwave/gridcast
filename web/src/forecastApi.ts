@@ -93,7 +93,13 @@ function parseOutlooks(payload: unknown): ReadonlyMap<number, Outlook> {
     const shown = Array.isArray(payload) ? `${String(payload.length)} outlooks` : describe(payload);
     throw new OutlookUnavailableError(`expected ${String(REGION_COUNT)} outlooks, got ${shown}`);
   }
-  return new Map(payload.map((entry: unknown, index) => [index + 1, parseOutlook(entry, index + 1)] as const));
+  const outlooks = payload.map((entry: unknown, index) => parseOutlook(entry, index + 1));
+  // The map reads every region at one slot, so a region on another set of half hours would be shown at the wrong time.
+  const spans = new Set(outlooks.map((outlook) => `${String(outlook.firstSlotStartMs)}+${String(outlook.intensities.length)}`));
+  if (spans.size !== 1) {
+    throw new OutlookUnavailableError(`expected every outlook to cover the same half hours, got ${String(spans.size)} different spans`);
+  }
+  return new Map(outlooks.map((outlook) => [outlook.regionId, outlook] as const));
 }
 
 function parseOutlook(payload: unknown, regionId: number): Outlook {

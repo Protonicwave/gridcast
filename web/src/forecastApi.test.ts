@@ -125,6 +125,16 @@ it.each([
   expect(await failureMessage(fetchLondon())).toBe(message);
 });
 
+it.each([
+  ["another first half hour", { firstSlotStart: "2026-11-19T14:30Z" }],
+  ["another length", { intensities: [...SIXTY_SLOTS, 100] }],
+])("rejects regions that cover different half hours: %s", async (_case, change) => {
+  const regions = allRegions(validBody());
+  regions[3] = { ...validBody(), regionId: 4, regionName: "Region 4", ...change };
+  respondWith(regions);
+  expect(await failureMessage(fetchLondon())).toBe("expected every outlook to cover the same half hours, got 2 different spans");
+});
+
 it("rejects a response other than 200, naming the status", async () => {
   respondWith({ detail: "the forecast archive is unavailable" }, 503);
   expect(await failureMessage(fetchLondon())).toBe("expected HTTP 200 from https://api.example/regions/outlook, got 503");
