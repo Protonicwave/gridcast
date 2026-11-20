@@ -1,7 +1,8 @@
-import { type KeyboardEvent, type PointerEvent, useCallback, useId, useState } from "react";
+import { type KeyboardEvent, type PointerEvent, useId } from "react";
 import { type ChartScales, chartScales, hourTicks, rampColour, stepPath, valueTicks } from "./chartGeometry";
 import type { DurationHours, DurationWindows, Outlook } from "./forecastApi";
 import { clock, dayWord, durationNoun } from "./time";
+import { useMeasuredSize } from "./useMeasuredSize";
 
 /** Keeps the window's label inside the plot when the window sits at either end. */
 const WINDOW_LABEL_HALF_WIDTH_PX = 40;
@@ -23,7 +24,7 @@ interface ChartProps {
 /** The forecast as a step line with the cleanest window shaded; a slider over its half hours. */
 export function Chart({ outlook, heading, hours, choice, cursor, cursorValue, nowMs, onCursorChange }: ChartProps) {
   const headingId = useId();
-  const [measure, measuredWidthPx] = useMeasuredWidth();
+  const [measure, { widthPx: measuredWidthPx }] = useMeasuredSize();
   const slotCount = outlook.intensities.length;
   const scales = chartScales(measuredWidthPx, slotCount, Math.max(...outlook.intensities));
   const cursorStartMs = outlook.firstSlotStartMs + cursor * outlook.slotMs;
@@ -72,26 +73,8 @@ export function Chart({ outlook, heading, hours, choice, cursor, cursorValue, no
           <Cursor scales={scales} slot={cursor} gPerKwh={cursorValue} />
         </svg>
       </div>
-      <p className="chart-hint">Drag along the chart, or use the arrow keys, to see any half hour.</p>
     </>
   );
-}
-
-/** A ref for an element, and that element's width in pixels, kept current as it resizes. */
-function useMeasuredWidth() {
-  const [widthPx, setWidthPx] = useState(0);
-  const measure = useCallback((node: HTMLDivElement | null) => {
-    if (node === null) return;
-    const observer = new ResizeObserver(() => {
-      setWidthPx(node.clientWidth);
-    });
-    observer.observe(node);
-    setWidthPx(node.clientWidth);
-    return () => {
-      observer.disconnect();
-    };
-  }, []);
-  return [measure, widthPx] as const;
 }
 
 function ChartHead({ headingId, heading, windowKey }: { readonly headingId: string; readonly heading: string; readonly windowKey: string | null }) {

@@ -47,7 +47,7 @@ jobs:
       - run: uv run coverage run --branch --source=gridcast -m pytest -q
       - run: >-
           uv run coverage report --show-missing --fail-under=100
-          --include="src/gridcast/issues.py,src/gridcast/archive.py,src/gridcast/outlook.py"
+          --include="src/gridcast/issues.py,src/gridcast/archive.py,src/gridcast/outlook.py,src/gridcast/accuracy.py"
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
@@ -72,11 +72,13 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
-      - run: npm run test -- --coverage --coverage.include=src/forecastApi.ts --coverage.thresholds.100
+      - run: npm run test -- --coverage --coverage.include=src/forecastApi.ts --coverage.include=src/postcode.ts --coverage.include=src/accuracy/accuracyApi.ts --coverage.thresholds.100
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run knip
       - run: npm run build
+      - name: Check the script against its size budgets
+        run: python3 ../scripts/check_bundle.py dist
       - run: npm audit
 
   image:

@@ -37,12 +37,21 @@ function londonOutlook(overrides: Record<string, unknown> = {}): Record<string, 
   };
 }
 
+/** Fourteen outlooks, each region's the same as London's except for its id and name: the API gives every region the same half hours. */
+function everyRegion(london: Record<string, unknown>): Record<string, unknown>[] {
+  return Array.from({ length: 14 }, (_, index) => {
+    const regionId = index + 1;
+    return regionId === 13 ? london : { ...london, regionId, regionName: `Region ${String(regionId)}` };
+  });
+}
+
 function serve(...bodies: { readonly status: number; readonly body: unknown }[]) {
   const queue = [...bodies];
   const fake = vi.fn<typeof fetch>(() => {
     const next = queue.shift();
     if (next === undefined) return new Promise<Response>(() => undefined);
-    return Promise.resolve(new Response(JSON.stringify(next.body), { status: next.status }));
+    const body = next.status === 200 ? everyRegion(next.body as Record<string, unknown>) : next.body;
+    return Promise.resolve(new Response(JSON.stringify(body), { status: next.status }));
   });
   vi.stubGlobal("fetch", fake);
   return fake;
@@ -57,7 +66,7 @@ async function heading() {
 }
 
 beforeEach(() => {
-  window.history.replaceState(null, "", "/");
+  window.history.replaceState(null, "", "/?region=13");
   vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
 
@@ -79,11 +88,11 @@ it("answers with London's cleanest three hours and draws the series", async () =
   expect(screen.queryByRole("status")).toBeNull();
 });
 
-it("calls the API for London", async () => {
+it("calls the API once for every region", async () => {
   const fake = serve({ status: 200, body: londonOutlook() });
   renderApp();
   await heading();
-  expect(fake.mock.calls[0]?.[0]).toBe("/regions/13/outlook");
+  expect(fake.mock.calls[0]?.[0]).toBe("/regions/outlook");
 });
 
 it("warns when the forecast is older than 75 minutes", async () => {
@@ -127,11 +136,11 @@ it("moves the answer and the band when the duration changes, and keeps it in the
   fireEvent.click(screen.getByLabelText("1 h"));
   expect(await heading()).toBe("Tonight, 01:00 to 02:00");
   expect(bandWidth()).toBeCloseTo(threeHourWidth / 3);
-  expect(window.location.search).toBe("?hours=1");
+  expect(window.location.search).toBe("?region=13&hours=1");
 });
 
 it("disables durations longer than what remains of the forecast and shows the longest that fits", async () => {
-  window.history.replaceState(null, "", "/?hours=4");
+  window.history.replaceState(null, "", "/?region=13&hours=4");
   const windows = { "1": { cleanest: { start: 4, mean: 80 }, dirtiest: { start: 0, mean: 250 }, timingMatters: true } };
   serve({ status: 200, body: londonOutlook({ intensities: [250, 250, 200, 200, 80, 80], windows }) });
   renderApp();

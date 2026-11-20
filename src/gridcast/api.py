@@ -2,23 +2,42 @@
 
 import logging
 import os
-from collections.abc import Callable
-from datetime import UTC, datetime
-from typing import Any
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from datetime import UTC, date, datetime, time
+from typing import Annotated, Any
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from gridcast.archive import CONNECT_TIMEOUT_SECONDS, DATABASE_URL_VARIABLE, latest_issue
+from gridcast.accuracy import (
+    MAX_LEAD_TIME,
+    Estimate,
+    NationalAccuracy,
+    evaluate_national,
+    evaluation_window,
+)
+from gridcast.archive import (
+    CONNECT_TIMEOUT_SECONDS,
+    DATABASE_URL_VARIABLE,
+    latest_issue,
+    latest_issues,
+    national_actuals,
+    national_issues,
+)
 from gridcast.forecast import SLOT_MINUTES, format_slot_time
+from gridcast.issues import StoredIssue
 from gridcast.outlook import DurationWindows, Outlook, build_outlook
 from gridcast.regions import REGIONS
 from gridcast.windows import Window
 
 ALLOWED_ORIGIN_VARIABLE = "GRIDCAST_ALLOWED_ORIGIN"
 CACHE_MAX_AGE_SECONDS = 60
+ACCURACY_CACHE_MAX_AGE_SECONDS = 1_800
 STATEMENT_TIMEOUT_MS = 5_000
+# Far before the archive begins, and far enough from date.min that the window stays valid.
+EARLIEST_UNTIL = date(2000, 1, 1)
 
 _REGIONS_BY_ID = {region.api_id: region for region in REGIONS}
 _FETCHED_AT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -32,7 +51,7 @@ def create_app(
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> FastAPI:
     """The service, reading the archive at `database_url` and allowing browsers on
-    `allowed_origin` to call it. `now` is the clock the outlook is cut at."""
+    `allowed_origin` to call it. `now` is the clock the outlooks and the accuracy are cut at."""
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(CORSMiddleware, allow_origins=[allowed_origin], allow_methods=["GET"])
 
@@ -41,17 +60,8 @@ def create_app(
         region = _REGIONS_BY_ID.get(region_id)
         if region is None:
             raise HTTPException(404, f"expected a region from 1 to 14, got {region_id}")
-        try:
-            with psycopg.connect(
-                database_url,
-                connect_timeout=CONNECT_TIMEOUT_SECONDS,
-                options=f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",
-            ) as connection:
-                issue = latest_issue(connection, region_id)
-        except psycopg.Error as err:
-            # The class only: the message can hold the connection URL.
-            log.error("archive unavailable error_class=%s", type(err).__name__)
-            raise HTTPException(503, "the forecast archive is unavailable") from err
+        with _archive_connection(database_url) as connection:
+            issue = latest_issue(connection, region_id)
         if issue is None:
             raise HTTPException(503, "no forecast has been archived for this region")
         outlook = build_outlook(region, issue, now())
@@ -59,6 +69,28 @@ def create_app(
             raise HTTPException(503, "the newest forecast has no half hour left")
         response.headers["Cache-Control"] = f"public, max-age={CACHE_MAX_AGE_SECONDS}"
         return _outlook_body(outlook)
+
+    @app.get("/regions/outlook")
+    def all_outlooks(response: Response) -> list[dict[str, Any]]:
+        with _archive_connection(database_url) as connection:
+            issues = latest_issues(connection)
+        outlooks = _every_outlook(issues, now())
+        response.headers["Cache-Control"] = f"public, max-age={CACHE_MAX_AGE_SECONDS}"
+        return [_outlook_body(outlook) for outlook in outlooks]
+
+    @app.get("/accuracy/national")
+    def national_accuracy(
+        response: Response, until: Annotated[date | None, Query(ge=EARLIEST_UNTIL)] = None
+    ) -> dict[str, Any]:
+        today = now().astimezone(UTC).date()
+        first_day, end_day = evaluation_window(today, until)
+        first_slot, end_slot = _midnight(first_day), _midnight(end_day)
+        with _archive_connection(database_url) as connection:
+            issues = national_issues(connection, first_slot - MAX_LEAD_TIME, end_slot)
+            actuals = national_actuals(connection, first_slot, end_slot)
+        accuracy = evaluate_national(issues, actuals, today, until)
+        response.headers["Cache-Control"] = f"public, max-age={ACCURACY_CACHE_MAX_AGE_SECONDS}"
+        return _accuracy_body(accuracy, end_day)
 
     return app
 
@@ -99,3 +131,73 @@ def _windows_body(found: DurationWindows) -> dict[str, Any]:
 
 def _window_body(window: Window) -> dict[str, Any]:
     return {"start": window.start, "mean": window.mean}
+
+
+@contextmanager
+def _archive_connection(database_url: str) -> Iterator[psycopg.Connection[Any]]:
+    """A connection to the archive; a database failure becomes a 503."""
+    try:
+        with psycopg.connect(
+            database_url,
+            connect_timeout=CONNECT_TIMEOUT_SECONDS,
+            options=f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",
+        ) as connection:
+            yield connection
+    except psycopg.Error as err:
+        # The class only: the message can hold the connection URL.
+        log.error("archive unavailable error_class=%s", type(err).__name__)
+        raise HTTPException(503, "the forecast archive is unavailable") from err
+
+
+def _every_outlook(issues: Mapping[int, StoredIssue], current: datetime) -> list[Outlook]:
+    """One outlook per region, or a 503 naming why the site cannot draw them together."""
+    outlooks: list[Outlook] = []
+    missing: list[int] = []
+    for region in REGIONS:
+        issue = issues.get(region.api_id)
+        outlook = None if issue is None else build_outlook(region, issue, current)
+        if outlook is None:
+            missing.append(region.api_id)
+        else:
+            outlooks.append(outlook)
+    if missing:
+        raise HTTPException(503, f"no current forecast for regions {missing}")
+    # The site draws every region at one half hour, so regions must cover the same ones.
+    if len({(o.first_slot_start, len(o.intensities_g_per_kwh)) for o in outlooks}) != 1:
+        raise HTTPException(503, "the newest forecasts cover different half hours")
+    return outlooks
+
+
+def _midnight(day: date) -> datetime:
+    return datetime.combine(day, time.min, tzinfo=UTC)
+
+
+def _accuracy_body(accuracy: NationalAccuracy, until: date) -> dict[str, Any]:
+    return {
+        "until": until.isoformat(),
+        "bands": [
+            {
+                "fromHours": band.band.start_hours,
+                "toHours": band.band.end_hours,
+                "pairs": band.pairs,
+                **_estimate_body(band.estimate),
+            }
+            for band in accuracy.bands
+        ],
+        "difference": _estimate_body(accuracy.difference),
+        "days": {
+            "usable": [day.isoformat() for day in accuracy.usable_days],
+            "excluded": [
+                {"day": excluded.day.isoformat(), "reason": excluded.reason}
+                for excluded in accuracy.excluded_days
+            ],
+        },
+    }
+
+
+def _estimate_body(estimate: Estimate) -> dict[str, Any]:
+    interval = estimate.interval
+    return {
+        "maeGPerKwh": estimate.mae_g_per_kwh,
+        "interval": None if interval is None else {"low": interval.low, "high": interval.high},
+    }

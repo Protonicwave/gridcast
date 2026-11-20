@@ -2,6 +2,7 @@
 
 import gzip
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any, Literal
 
 import psycopg
@@ -65,6 +66,52 @@ def latest_issue(connection: psycopg.Connection[Any], area_id: int) -> StoredIss
         return None
     first_slot, intensities, fetched_at = row
     return StoredIssue(first_slot, tuple(intensities), fetched_at)
+
+
+def latest_issues(connection: psycopg.Connection[Any]) -> dict[int, StoredIssue]:
+    """The regional issue with the latest first slot of every area that has one, by area id."""
+    rows = connection.execute(
+        "select distinct on (issue.area_id) issue.area_id, issue.first_slot,"
+        " issue.intensities_g_per_kwh, api_fetch.fetched_at"
+        " from forecast_issue as issue inner join api_fetch on issue.fetch_id = api_fetch.fetch_id"
+        " where issue.feed = 'regional'"
+        " order by issue.area_id, issue.first_slot desc"
+    ).fetchall()
+    return {
+        area_id: StoredIssue(first_slot, tuple(intensities), fetched_at)
+        for area_id, first_slot, intensities, fetched_at in rows
+    }
+
+
+def national_issues(
+    connection: psycopg.Connection[Any], since: datetime, until: datetime
+) -> list[StoredIssue]:
+    """The national issues fetched from `since` up to but not including `until`, oldest first."""
+    rows = connection.execute(
+        "select issue.first_slot, issue.intensities_g_per_kwh, api_fetch.fetched_at"
+        " from forecast_issue as issue inner join api_fetch on issue.fetch_id = api_fetch.fetch_id"
+        " where issue.feed = 'national'"
+        " and api_fetch.fetched_at >= %s and api_fetch.fetched_at < %s"
+        " order by api_fetch.fetched_at",
+        (since, until),
+    ).fetchall()
+    return [
+        StoredIssue(first_slot, tuple(intensities), fetched_at)
+        for first_slot, intensities, fetched_at in rows
+    ]
+
+
+def national_actuals(
+    connection: psycopg.Connection[Any], since: datetime, until: datetime
+) -> dict[datetime, int]:
+    """The measured national intensity of each half hour starting from `since` up to but not
+    including `until`. Half hours NESO has not yet measured are left out."""
+    rows = connection.execute(
+        "select slot_start, intensity_g_per_kwh from national_actual"
+        " where slot_start >= %s and slot_start < %s and intensity_g_per_kwh is not null",
+        (since, until),
+    ).fetchall()
+    return dict(rows)
 
 
 def _add_issues(cursor: psycopg.Cursor[Any], fetch_id: int, issues: Sequence[Issue]) -> int:

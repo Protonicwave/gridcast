@@ -1,9 +1,13 @@
 """Region boundaries from British National Grid GeoJSON to simplified SVG paths."""
 
+import argparse
+import json
 import math
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
+from pathlib import Path
 from typing import Any
 
 from gridcast.regions import REGIONS
@@ -44,6 +48,41 @@ class MapGeometry:
     view_box: Frame
     shetland_frame: Frame
     regions: dict[str, RegionShape]
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Command line entry point: write the site's map shapes. Returns the process exit status."""
+    args = _parser().parse_args(argv)
+    try:
+        geometry = build_map(json.loads(args.boundaries.read_text(encoding="utf-8")))
+        args.output.write_text(
+            json.dumps(map_shapes(geometry), separators=(",", ":")) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+    except (OSError, ValueError) as err:
+        print(f"gridcast-map: {args.boundaries}: {err}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def map_shapes(geometry: MapGeometry) -> dict[str, Any]:
+    """The geometry as the site reads it: regions keyed by Carbon Intensity API id."""
+    _, _, width, height = geometry.view_box
+    x, y, frame_width, frame_height = geometry.shetland_frame
+    return {
+        "viewBox": {"width": width, "height": height},
+        "shetlandFrame": {"x": x, "y": y, "width": frame_width, "height": frame_height},
+        "regions": {
+            str(region.api_id): {
+                "path": geometry.regions[region.boundary_area].path,
+                "labelAt": dict(
+                    zip(("x", "y"), geometry.regions[region.boundary_area].label_at, strict=True)
+                ),
+            }
+            for region in REGIONS
+        },
+    }
 
 
 def build_map(geojson: Any) -> MapGeometry:  # parsed JSON, validated by the lookups below
@@ -125,6 +164,15 @@ def label_point(polygon: Polygon) -> Point:
         zip(crossings[0::2], crossings[1::2], strict=False), key=lambda s: s[1] - s[0]
     )
     return ((left + right) / 2, centroid_y)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gridcast-map", description="Write the site's region shapes as JSON."
+    )
+    parser.add_argument("boundaries", type=Path, help="region boundary GeoJSON")
+    parser.add_argument("output", type=Path, help="regionShapes.json to write")
+    return parser
 
 
 def _parse_feature(feature: Any, position: int) -> tuple[str, list[Polygon]]:

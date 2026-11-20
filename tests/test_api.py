@@ -46,6 +46,30 @@ def test_serves_the_outlook_in_the_documented_shape(stored_url: str) -> None:
     }
 
 
+def test_serves_every_region_in_id_order_with_the_single_region_body(stored_url: str) -> None:
+    client = client_for(stored_url)
+    response = client.get("/regions/outlook")
+    assert response.status_code == 200
+    bodies = response.json()
+    assert [body["regionId"] for body in bodies] == list(range(1, 15))
+    assert bodies[12] == client.get("/regions/13/outlook").json()
+    assert response.headers["cache-control"] == "public, max-age=60"
+
+
+def test_refuses_all_regions_when_one_has_no_forecast(archive: Archive) -> None:
+    store(archive, OK, None, slots=12)
+    archive.execute("delete from forecast_issue where area_id = 5")
+    archive.commit()
+    response = client_for(archive.info.dsn).get("/regions/outlook")
+    assert response.status_code == 503
+    assert "[5]" in response.json()["detail"]
+
+
+def test_refuses_all_regions_when_one_has_no_half_hour_left(stored_url: str) -> None:
+    response = client_for(stored_url, FIRST_SLOT + timedelta(hours=7)).get("/regions/outlook")
+    assert response.status_code == 503
+
+
 def test_lets_browsers_and_proxies_cache_for_a_minute(stored_url: str) -> None:
     response = client_for(stored_url).get("/regions/13/outlook")
     assert response.headers["cache-control"] == "public, max-age=60"
@@ -112,3 +136,14 @@ def test_names_the_variable_that_is_not_set(missing: str, monkeypatch: pytest.Mo
     monkeypatch.delenv(missing)
     with pytest.raises(RuntimeError, match=missing):
         app_from_environment()
+
+
+def test_refuses_all_regions_when_one_covers_different_half_hours(archive: Archive) -> None:
+    store(archive, OK, None, slots=12)
+    archive.execute(
+        "update forecast_issue set first_slot = first_slot - interval '1 hour' where area_id = 5"
+    )
+    archive.commit()
+    response = client_for(archive.info.dsn).get("/regions/outlook")
+    assert response.status_code == 503
+    assert "different half hours" in response.json()["detail"]

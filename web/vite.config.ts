@@ -8,8 +8,10 @@ export default defineConfig({
   // Relative asset URLs, so the built site works under a GitHub Pages project path.
   base: "./",
   plugins: [react()],
+  // scripts/check_bundle.py reads the manifest to size each chunk.
+  build: { manifest: true },
   // The dev and preview servers forward API calls, so the page and the API share an origin locally.
-  server: { host: "127.0.0.1", proxy: { "/regions": LOCAL_API_URL } },
+  server: { host: "127.0.0.1", proxy: { "/regions": LOCAL_API_URL, "/accuracy": LOCAL_API_URL } },
   preview: { host: "127.0.0.1" },
   test: {
     exclude: ["e2e/**", "node_modules/**"],

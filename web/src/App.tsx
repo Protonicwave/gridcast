@@ -1,14 +1,18 @@
-import { useEffect, useState } from "react";
+import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
+import { ChunkBoundary } from "./ChunkBoundary";
 import { Answer } from "./Answer";
 import { Chart } from "./Chart";
 import { DurationPicker } from "./DurationPicker";
-import { DURATIONS_HOURS, type DurationHours, type DurationWindows, fetchOutlook, type Outlook, OutlookUnavailableError } from "./forecastApi";
+import { type DurationHours, fetchOutlooks, type Outlook, OutlookUnavailableError, windowsFor } from "./forecastApi";
+import { PostcodeForm } from "./PostcodeForm";
 import { Readout } from "./Readout";
+import { MapSlot } from "./map/MapSlot";
+import { RegionList } from "./RegionList";
+import { SiteNav } from "./SiteNav";
 import { ageText, fetchedPhrase } from "./time";
+import { type CursorControl, useCursor } from "./useCursor";
+import { parseUrlState, parseView, type UrlState, urlWithState, type View } from "./urlState";
 
-const LONDON_REGION_ID = 13;
-const LONDON_NAME = "London";
-const DEFAULT_HOURS: DurationHours = 3;
 const HOUR_MS = 3_600_000;
 /** A response faster than this shows no loading text, so a quick load does not flash. */
 const LOADING_DELAY_MS = 200;
@@ -20,7 +24,7 @@ const STALE_AFTER_MS = 75 * 60_000;
 type Load =
   | { readonly kind: "waiting" }
   | { readonly kind: "loading" }
-  | { readonly kind: "ready"; readonly outlook: Outlook; readonly receivedAtMs: number }
+  | { readonly kind: "ready"; readonly outlooks: ReadonlyMap<number, Outlook>; readonly receivedAtMs: number }
   | { readonly kind: "unavailable" };
 
 interface AppProps {
@@ -29,26 +33,118 @@ interface AppProps {
   readonly now?: () => number;
 }
 
+// The accuracy page is a separate chunk, so the forecast does not carry its charts and copy.
+const LazyAccuracyView = lazy(() => import("./accuracy/AccuracyView").then((module) => ({ default: module.AccuracyView })));
+
+const VIEW_TITLES: Readonly<Record<View, string>> = {
+  forecast: "Gridcast: when is your electricity cleanest?",
+  accuracy: "How good is the forecast? Gridcast",
+};
+
 export function App({ apiBaseUrl, now = Date.now }: AppProps) {
-  const { load, retry } = useOutlook(apiBaseUrl, now);
+  const view = useView();
+  return (
+    <>
+      <SiteNav view={view} />
+      {view === "accuracy" ? <AccuracyPage apiBaseUrl={apiBaseUrl} /> : <ForecastPage apiBaseUrl={apiBaseUrl} now={now} />}
+    </>
+  );
+}
+
+/** The view the address names, following the visitor's use of the header links and the back button. */
+function useView(): View {
+  const [view, setView] = useState(() => parseView(window.location.hash));
+  useEffect(() => {
+    const follow = () => {
+      setView(parseView(window.location.hash));
+    };
+    window.addEventListener("hashchange", follow);
+    return () => {
+      window.removeEventListener("hashchange", follow);
+    };
+  }, []);
+  useEffect(() => {
+    document.title = VIEW_TITLES[view];
+  }, [view]);
+  return view;
+}
+
+function AccuracyPage({ apiBaseUrl }: { readonly apiBaseUrl: string }) {
+  return (
+    <ChunkBoundary what="the accuracy page" message="The accuracy page did not load. Reload the page to try again.">
+      <Suspense fallback={<div className="accuracy" aria-busy="true" />}>
+        <LazyAccuracyView apiBaseUrl={apiBaseUrl} />
+      </Suspense>
+    </ChunkBoundary>
+  );
+}
+
+function ForecastPage({ apiBaseUrl, now }: { readonly apiBaseUrl: string; readonly now: () => number }) {
+  const { load, retry } = useOutlooks(apiBaseUrl, now);
   switch (load.kind) {
     case "waiting":
       return <div className="forecast" aria-busy="true" />;
     case "loading":
       return (
         <div className="forecast answer" aria-busy="true">
-          <p className="answer__label">{LONDON_NAME}</p>
+          <p className="answer__label">Great Britain</p>
           <h1>Loading the forecast…</h1>
         </div>
       );
     case "unavailable":
       return <Unavailable onRetry={retry} />;
     case "ready":
-      return <Forecast outlook={load.outlook} nowMs={load.receivedAtMs} />;
+      return <Regions outlooks={load.outlooks} nowMs={load.receivedAtMs} />;
   }
 }
 
-function useOutlook(apiBaseUrl: string, now: () => number) {
+interface RegionsProps {
+  readonly outlooks: ReadonlyMap<number, Outlook>;
+  readonly nowMs: number;
+}
+
+/** The chosen region's forecast, or the prompt before one is chosen, beside the list of every region. */
+function Regions({ outlooks, nowMs }: RegionsProps) {
+  const [urlState, setUrlState] = useState(() => parseUrlState(window.location.search));
+  const choose = (next: UrlState) => {
+    setUrlState(next);
+    window.history.replaceState(null, "", urlWithState(window.location.href, next));
+  };
+  const selectRegion = (regionId: number) => {
+    choose({ ...urlState, regionId });
+  };
+  // Every region covers the same half hours, and region 1 is always present.
+  const cursorControl = useCursor((outlooks.get(1)?.intensities.length ?? 1) - 1);
+  const region = urlState.regionId === null ? undefined : outlooks.get(urlState.regionId);
+  const form = <PostcodeForm onRegion={selectRegion} />;
+  return (
+    <div className="forecast-layout">
+      <div className="forecast-main">
+        {region === undefined ? (
+          <Prompt form={form} />
+        ) : (
+          <Forecast
+            key={region.regionId}
+            outlook={region}
+            cursorControl={cursorControl}
+            hours={urlState.hours}
+            nowMs={nowMs}
+            form={form}
+            onSelectHours={(hours) => {
+              choose({ ...urlState, hours });
+            }}
+          />
+        )}
+      </div>
+      <aside className="forecast-aside">
+        <MapSlot outlooks={outlooks} cursor={cursorControl.cursor} selectedId={region?.regionId ?? null} nowMs={nowMs} onSelect={selectRegion} />
+        <RegionList outlooks={outlooks} hours={urlState.hours} selectedId={region?.regionId ?? null} nowMs={nowMs} onSelect={selectRegion} />
+      </aside>
+    </div>
+  );
+}
+
+function useOutlooks(apiBaseUrl: string, now: () => number) {
   const [load, setLoad] = useState<Load>({ kind: "waiting" });
   const [attempt, setAttempt] = useState(0);
 
@@ -58,10 +154,10 @@ function useOutlook(apiBaseUrl: string, now: () => number) {
       setLoad((current) => (current.kind === "waiting" ? { kind: "loading" } : current));
     }, LOADING_DELAY_MS);
     // Expected failures become the unavailable state; anything else is a bug, left to surface as an unhandled rejection.
-    void fetchOutlook(apiBaseUrl, LONDON_REGION_ID, controller.signal)
+    void fetchOutlooks(apiBaseUrl, controller.signal)
       .then(
-        (outlook) => {
-          setLoad({ kind: "ready", outlook, receivedAtMs: now() });
+        (outlooks) => {
+          setLoad({ kind: "ready", outlooks, receivedAtMs: now() });
         },
         (error: unknown) => {
           if (controller.signal.aborted) return;
@@ -97,28 +193,33 @@ function useOutlook(apiBaseUrl: string, now: () => number) {
   return { load, retry };
 }
 
-function Forecast({ outlook, nowMs }: { readonly outlook: Outlook; readonly nowMs: number }) {
-  const [selectedHours, setSelectedHours] = useState(hoursFromUrl);
-  const [cursorChoice, setCursorChoice] = useState(0);
+interface ForecastProps {
+  readonly outlook: Outlook;
+  readonly hours: DurationHours;
+  readonly nowMs: number;
+  /** The half hour under the cursor, shared with the map, and the playback that steps it. */
+  readonly cursorControl: CursorControl;
+  /** The postcode form, shown between the answer and the detail. */
+  readonly form: ReactNode;
+  readonly onSelectHours: (hours: DurationHours) => void;
+}
+
+function Forecast({ outlook, hours: selectedHours, nowMs, cursorControl, form, onSelectHours }: ForecastProps) {
   const [hours, choice] = windowsFor(outlook, selectedHours);
-  const cursor = Math.min(cursorChoice, outlook.intensities.length - 1);
+  const { cursor } = cursorControl;
   const cursorValue = outlook.intensities[cursor];
   if (cursorValue === undefined) throw new RangeError(`expected a cursor inside ${String(outlook.intensities.length)} half hours, got ${String(cursor)}`);
   const cursorStartMs = outlook.firstSlotStartMs + cursor * outlook.slotMs;
   const spanHours = Math.round((outlook.intensities.length * outlook.slotMs) / HOUR_MS);
   const ageMs = nowMs - outlook.fetchedAtMs;
 
-  const selectHours = (next: DurationHours) => {
-    setSelectedHours(next);
-    writeHoursToUrl(next);
-  };
-
   return (
-    <div className="forecast">
+    <>
       {ageMs > STALE_AFTER_MS && <StaleNotice age={ageText(ageMs)} />}
       <p className="freshness">{fetchedPhrase(outlook.fetchedAtMs)} NESO updates it every half hour.</p>
       <Answer outlook={outlook} hours={hours} choice={choice} spanHours={spanHours} nowMs={nowMs} />
-      <DurationPicker selected={hours} available={outlook.windows} onSelect={selectHours} />
+      {form}
+      <DurationPicker selected={hours} available={outlook.windows} onSelect={onSelectHours} />
       <Chart
         outlook={outlook}
         heading={`Next ${String(spanHours)} hours in ${outlook.regionName}`}
@@ -127,32 +228,29 @@ function Forecast({ outlook, nowMs }: { readonly outlook: Outlook; readonly nowM
         cursor={cursor}
         cursorValue={cursorValue}
         nowMs={nowMs}
-        onCursorChange={setCursorChoice}
+        onCursorChange={cursorControl.moveTo}
       />
+      <div className="chart-actions">
+        <button className="button button--quiet" type="button" onClick={cursorControl.togglePlaying}>
+          {cursorControl.isPlaying ? "Pause" : `Play the next ${String(spanHours)} hours`}
+        </button>
+        <span className="chart-hint">Drag along the chart, or use the arrow keys, to see any half hour on the map.</span>
+      </div>
       <Readout startMs={cursorStartMs} endMs={cursorStartMs + outlook.slotMs} nowMs={nowMs} gPerKwh={cursorValue} />
-    </div>
+    </>
   );
 }
 
-/** The chosen duration's windows, or the longest that fits when the forecast is too short for it. */
-function windowsFor(outlook: Outlook, selected: DurationHours): readonly [DurationHours, DurationWindows] {
-  const chosen = outlook.windows.get(selected);
-  if (chosen !== undefined) return [selected, chosen];
-  const longest = [...outlook.windows].at(-1);
-  if (longest === undefined) throw new RangeError("expected an outlook with at least one duration's windows");
-  return longest;
-}
-
-function hoursFromUrl(): DurationHours {
-  const requested = Number(new URLSearchParams(window.location.search).get("hours"));
-  return DURATIONS_HOURS.find((hours) => hours === requested) ?? DEFAULT_HOURS;
-}
-
-function writeHoursToUrl(hours: DurationHours) {
-  const url = new URL(window.location.href);
-  if (hours === DEFAULT_HOURS) url.searchParams.delete("hours");
-  else url.searchParams.set("hours", String(hours));
-  window.history.replaceState(null, "", url);
+function Prompt({ form }: { readonly form: ReactNode }) {
+  return (
+    <>
+      <div className="answer">
+        <h1>When is your electricity cleanest?</h1>
+        <p className="answer__detail">Enter a postcode, or pick a region on the map or from the list, to see the cleanest time to use electricity there in the next 48 hours.</p>
+      </div>
+      {form}
+    </>
+  );
 }
 
 function StaleNotice({ age }: { readonly age: string }) {

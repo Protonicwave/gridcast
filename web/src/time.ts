@@ -52,6 +52,11 @@ export function windowPhrase(startMs: number, endMs: number, nowMs: number): str
   return `${dayWord(startMs, nowMs)}, ${clock(startMs)} to ${clock(endMs)}`;
 }
 
+/** "now", or "tomorrow 02:00" for a half hour that has not begun at `nowMs`. */
+export function slotPhrase(startMs: number, nowMs: number): string {
+  return startMs <= nowMs ? "now" : `${dayWord(startMs, nowMs)} ${clock(startMs)}`;
+}
+
 /** "Tomorrow, 09:30 to 10:00". */
 export function halfHourPhrase(startMs: number, endMs: number, nowMs: number): string {
   return `${capitalise(dayWord(startMs, nowMs))}, ${clock(startMs)} to ${clock(endMs)}`;
