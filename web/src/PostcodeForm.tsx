@@ -35,7 +35,7 @@ export function PostcodeForm({ onRegion }: PostcodeFormProps) {
       <button className="button button--quiet" type="submit" aria-busy={busy}>
         {busy ? "Finding…" : "Find region"}
       </button>
-      <span className="postcode-form__or">or pick a region from the list</span>
+      <span className="postcode-form__or">or pick a region on the map or from the list</span>
       <p className="field__error" id="postcode-message" role="alert" hidden={message === ""}>
         {message}
       </p>

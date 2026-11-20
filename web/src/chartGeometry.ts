@@ -99,3 +99,9 @@ export function rampColour(value: number): string {
   const mix = (a: number, b: number) => a + (b - a) * t;
   return `oklch(${mix(lowL, highL).toFixed(3)} ${mix(lowC, highC).toFixed(3)} ${mix(lowH, highH).toFixed(1)})`;
 }
+
+/** The ramp as a left-to-right CSS gradient from 0 to its top value, for the map's legend. */
+export function rampGradient(): string {
+  const stops = RAMP_STOPS.map(([value]) => `${rampColour(value)} ${((value / RAMP_MAX_G_PER_KWH) * 100).toFixed(1)}%`);
+  return `linear-gradient(to right, ${stops.join(", ")})`;
+}

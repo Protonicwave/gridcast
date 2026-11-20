@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
+import { rampColour } from "./chartGeometry";
 
 /** 15:10 on Thursday 19 November 2026, UK time. */
 const NOW_MS = Date.parse("2026-11-19T15:10Z");
@@ -164,4 +165,31 @@ it("uses the newer lookup when a second one starts before the first answers", as
   submit();
   expect(await screen.findByRole("heading", { level: 2, name: "Next 48 hours in London" })).toBeTruthy();
   expect(firstSignal?.aborted).toBe(true);
+});
+
+it("selects a region by clicking it on the map", async () => {
+  stubNetwork();
+  const { container } = renderApp();
+  await waitFor(() => { expect(container.querySelectorAll("path.region")).toHaveLength(14); });
+  fireEvent.click(container.querySelectorAll("path.region")[12] as Element);
+  expect(await screen.findByRole("heading", { level: 2, name: "Next 48 hours in London" })).toBeTruthy();
+  expect(window.location.search).toBe("?region=13");
+  expect(container.querySelectorAll("path.region--selected")).toHaveLength(1);
+});
+
+it("recolours the map when the chart's cursor moves", async () => {
+  window.history.replaceState(null, "", "/?region=5");
+  stubNetwork();
+  const { container } = renderApp();
+  await waitFor(() => { expect(container.querySelectorAll("path.region")).toHaveLength(14); });
+  const fills = () => [...container.querySelectorAll("path.region")].map((path) => path.getAttribute("fill"));
+  const atStart = fills();
+  const slider = await screen.findByRole("slider");
+  // Two pages of twelve half hours reach 02:00, where only Yorkshire dips.
+  fireEvent.keyDown(slider, { key: "PageDown" });
+  fireEvent.keyDown(slider, { key: "PageDown" });
+  const atDip = fills();
+  expect(atDip[4]).toBe(rampColour(20));
+  expect(atStart[4]).toBe(rampColour(50));
+  expect(atDip.filter((_, index) => index !== 4)).toEqual(atStart.filter((_, index) => index !== 4));
 });

@@ -5,6 +5,7 @@ import { DurationPicker } from "./DurationPicker";
 import { type DurationHours, fetchOutlooks, type Outlook, OutlookUnavailableError, windowsFor } from "./forecastApi";
 import { PostcodeForm } from "./PostcodeForm";
 import { Readout } from "./Readout";
+import { MapSlot } from "./map/MapSlot";
 import { RegionList } from "./RegionList";
 import { ageText, fetchedPhrase } from "./time";
 import { parseUrlState, type UrlState, urlWithState } from "./urlState";
@@ -63,6 +64,7 @@ function Regions({ outlooks, nowMs }: RegionsProps) {
   const selectRegion = (regionId: number) => {
     choose({ ...urlState, regionId });
   };
+  const [cursor, setCursor] = useState(0);
   const region = urlState.regionId === null ? undefined : outlooks.get(urlState.regionId);
   const form = <PostcodeForm onRegion={selectRegion} />;
   return (
@@ -74,6 +76,8 @@ function Regions({ outlooks, nowMs }: RegionsProps) {
           <Forecast
             key={region.regionId}
             outlook={region}
+            cursor={cursor}
+            onCursorChange={setCursor}
             hours={urlState.hours}
             nowMs={nowMs}
             form={form}
@@ -84,6 +88,7 @@ function Regions({ outlooks, nowMs }: RegionsProps) {
         )}
       </div>
       <aside className="forecast-aside">
+        <MapSlot outlooks={outlooks} cursor={cursor} selectedId={region?.regionId ?? null} nowMs={nowMs} onSelect={selectRegion} />
         <RegionList outlooks={outlooks} hours={urlState.hours} selectedId={region?.regionId ?? null} nowMs={nowMs} onSelect={selectRegion} />
       </aside>
     </div>
@@ -143,15 +148,17 @@ interface ForecastProps {
   readonly outlook: Outlook;
   readonly hours: DurationHours;
   readonly nowMs: number;
+  /** The half hour under the cursor, shared with the map. */
+  readonly cursor: number;
+  readonly onCursorChange: (slot: number) => void;
   /** The postcode form, shown between the answer and the detail. */
   readonly form: ReactNode;
   readonly onSelectHours: (hours: DurationHours) => void;
 }
 
-function Forecast({ outlook, hours: selectedHours, nowMs, form, onSelectHours }: ForecastProps) {
-  const [cursorChoice, setCursorChoice] = useState(0);
+function Forecast({ outlook, hours: selectedHours, nowMs, cursor: requestedCursor, onCursorChange, form, onSelectHours }: ForecastProps) {
   const [hours, choice] = windowsFor(outlook, selectedHours);
-  const cursor = Math.min(cursorChoice, outlook.intensities.length - 1);
+  const cursor = Math.min(requestedCursor, outlook.intensities.length - 1);
   const cursorValue = outlook.intensities[cursor];
   if (cursorValue === undefined) throw new RangeError(`expected a cursor inside ${String(outlook.intensities.length)} half hours, got ${String(cursor)}`);
   const cursorStartMs = outlook.firstSlotStartMs + cursor * outlook.slotMs;
@@ -173,8 +180,9 @@ function Forecast({ outlook, hours: selectedHours, nowMs, form, onSelectHours }:
         cursor={cursor}
         cursorValue={cursorValue}
         nowMs={nowMs}
-        onCursorChange={setCursorChoice}
+        onCursorChange={onCursorChange}
       />
+      <p className="chart-hint">Drag along the chart, or use the arrow keys, to see any half hour on the map.</p>
       <Readout startMs={cursorStartMs} endMs={cursorStartMs + outlook.slotMs} nowMs={nowMs} gPerKwh={cursorValue} />
     </>
   );
@@ -185,7 +193,7 @@ function Prompt({ form }: { readonly form: ReactNode }) {
     <>
       <div className="answer">
         <h1>When is your electricity cleanest?</h1>
-        <p className="answer__detail">Enter a postcode, or pick a region from the list, to see the cleanest time to use electricity there in the next 48 hours.</p>
+        <p className="answer__detail">Enter a postcode, or pick a region on the map or from the list, to see the cleanest time to use electricity there in the next 48 hours.</p>
       </div>
       {form}
     </>

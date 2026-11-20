@@ -36,6 +36,8 @@
   --danger-wash: oklch(0.955 0.030 28);
 
   --halo: var(--n-1);
+  --map-label-ink: oklch(0.200 0.020 250);
+  --map-label-halo: oklch(0.985 0.003 250 / 0.88);
 
   --font-text: "Source Sans 3", "Source Sans 3 fallback", sans-serif;
 
@@ -162,6 +164,23 @@ input[type="text"]::placeholder { text-transform: none; color: var(--n-9); }
 input[aria-invalid="true"] { border-color: var(--danger-ink); }
 .postcode-form__or { color: var(--n-11); font-size: var(--step--1); padding-bottom: 11px; }
 .button[aria-busy="true"] { cursor: progress; }
+
+/* Map */
+.map-head { display: flex; justify-content: space-between; gap: var(--space-3); align-items: baseline; margin-bottom: var(--space-3); flex-wrap: wrap; }
+.map { position: relative; }
+.map svg { display: block; width: 100%; height: auto; max-height: 72vh; }
+.map--waiting { width: 100%; max-height: 72vh; background: var(--n-3); border-radius: 4px; }
+.map .region { stroke: var(--n-1); stroke-width: 0.8; vector-effect: non-scaling-stroke; cursor: pointer; fill-rule: evenodd; }
+.map .region:hover { stroke: var(--n-12); stroke-width: 1.5; }
+.map .region--selected { stroke: var(--n-12); stroke-width: 2.5; }
+.map .inset-frame { fill: none; stroke: var(--n-7); stroke-width: 1; vector-effect: non-scaling-stroke; }
+/* Map labels sit on fills from pale to dark in either scheme, so they keep one dark-on-light treatment. */
+.map text { font-family: var(--font-text); fill: var(--map-label-ink); paint-order: stroke; stroke: var(--map-label-halo); stroke-linejoin: round; pointer-events: none; }
+.map .label-name { font-weight: 650; }
+.legend { margin-top: var(--space-3); font-size: var(--step--1); color: var(--n-11); max-width: 320px; }
+.legend__ramp { height: 10px; border-radius: 2px; margin-bottom: var(--space-1); }
+.legend__ticks { display: flex; justify-content: space-between; }
+.legend + h2 { margin-top: var(--space-6); }
 
 .region-list { list-style: none; margin: var(--space-3) 0 0; padding: 0; }
 .region-row {
