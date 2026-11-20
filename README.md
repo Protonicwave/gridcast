@@ -48,6 +48,8 @@ curl http://127.0.0.1:8000/regions/13/outlook
 
 `/regions/<1 to 14>/outlook` answers 404 for another number, 422 for a value that is not an integer, and 503 when the archive holds no usable forecast or cannot be read.
 
+`/accuracy/national` reports NESO's national forecast error for lead times of 1 to 6, 6 to 12, 12 to 24 and 24 to 48 hours, with a 95% interval for each and for the difference between the last and the first once seven days are usable. `?until=YYYY-MM-DD` stops the evaluation before that UTC day; it never reads the day under way. A day is used only when all 48 actuals are stored and every band holds at least 90% of its nominal pairs; the others are listed with the reason. It answers 422 for a malformed `until` and 503 when the archive cannot be read.
+
 Serve the site against that API. The dev server forwards `/regions` to `127.0.0.1:8000`, so no cross-origin setting is needed:
 
 ```sh
@@ -116,6 +118,12 @@ The API's budget is a median under 500 ms for London's outlook over 20 warm requ
 
 ```sh
 uv run python scripts/time_outlook.py "$(terraform -chdir=infra output -raw api_url)"
+```
+
+`--path` times another path and `--budget-ms` sets its limit. The accuracy endpoint's budget is a median under 1000 ms:
+
+```sh
+uv run python scripts/time_outlook.py "$(terraform -chdir=infra output -raw api_url)" --path /accuracy/national --budget-ms 1000
 ```
 
 ## Site
