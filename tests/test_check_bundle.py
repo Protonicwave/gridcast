@@ -11,6 +11,7 @@ import pytest
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "check_bundle.py"
 KIB = 1024
 MAP_SOURCE = "src/map/RegionMap.tsx"
+ACCURACY_SOURCE = "src/accuracy/AccuracyView.tsx"
 
 
 def _load_script() -> ModuleType:
@@ -36,6 +37,7 @@ def _write_dist(
     *,
     entry_bytes: int = 10 * KIB,
     map_bytes: int | None = 5 * KIB,
+    accuracy_bytes: int | None = 3 * KIB,
     shared_bytes: int | None = None,
 ) -> None:
     (dist / ".vite").mkdir(parents=True)
@@ -51,6 +53,13 @@ def _write_dist(
             "isDynamicEntry": True,
         }
         (dist / "assets" / "map.js").write_bytes(_incompressible(map_bytes))
+    if accuracy_bytes is not None:
+        manifest[ACCURACY_SOURCE] = {
+            "file": "assets/accuracy.js",
+            "src": ACCURACY_SOURCE,
+            "isDynamicEntry": True,
+        }
+        (dist / "assets" / "accuracy.js").write_bytes(_incompressible(accuracy_bytes))
     if shared_bytes is not None:
         manifest["_shared.js"] = {"file": "assets/shared.js", "name": "shared"}
         (dist / "assets" / "shared.js").write_bytes(_incompressible(shared_bytes))
@@ -108,8 +117,8 @@ def test_counts_a_chunk_with_no_budget_of_its_own_in_the_total(
     _, report = _run(tmp_path, capsys)
     match = re.search(r"total: ok, ([\d.]+) KiB", report)
     assert match is not None
-    # 10 + 5 + 20 KiB of bytes gzip cannot shrink, plus its small framing.
-    assert 35.0 <= float(match.group(1)) <= 35.5
+    # 10 + 5 + 3 + 20 KiB of bytes gzip cannot shrink, plus its small framing.
+    assert 38.0 <= float(match.group(1)) <= 38.5
 
 
 def test_fails_when_a_budgeted_chunk_is_missing(
