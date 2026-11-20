@@ -1,4 +1,5 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
+import { ChunkBoundary } from "./ChunkBoundary";
 import { Answer } from "./Answer";
 import { Chart } from "./Chart";
 import { DurationPicker } from "./DurationPicker";
@@ -7,9 +8,10 @@ import { PostcodeForm } from "./PostcodeForm";
 import { Readout } from "./Readout";
 import { MapSlot } from "./map/MapSlot";
 import { RegionList } from "./RegionList";
+import { SiteNav } from "./SiteNav";
 import { ageText, fetchedPhrase } from "./time";
 import { type CursorControl, useCursor } from "./useCursor";
-import { parseUrlState, type UrlState, urlWithState } from "./urlState";
+import { parseUrlState, parseView, type UrlState, urlWithState, type View } from "./urlState";
 
 const HOUR_MS = 3_600_000;
 /** A response faster than this shows no loading text, so a quick load does not flash. */
@@ -31,7 +33,53 @@ interface AppProps {
   readonly now?: () => number;
 }
 
+// The accuracy page is a separate chunk, so the forecast does not carry its charts and copy.
+const LazyAccuracyView = lazy(() => import("./accuracy/AccuracyView").then((module) => ({ default: module.AccuracyView })));
+
+const VIEW_TITLES: Readonly<Record<View, string>> = {
+  forecast: "Gridcast: when is your electricity cleanest?",
+  accuracy: "How good is the forecast? Gridcast",
+};
+
 export function App({ apiBaseUrl, now = Date.now }: AppProps) {
+  const view = useView();
+  return (
+    <>
+      <SiteNav view={view} />
+      {view === "accuracy" ? <AccuracyPage apiBaseUrl={apiBaseUrl} /> : <ForecastPage apiBaseUrl={apiBaseUrl} now={now} />}
+    </>
+  );
+}
+
+/** The view the address names, following the visitor's use of the header links and the back button. */
+function useView(): View {
+  const [view, setView] = useState(() => parseView(window.location.hash));
+  useEffect(() => {
+    const follow = () => {
+      setView(parseView(window.location.hash));
+    };
+    window.addEventListener("hashchange", follow);
+    return () => {
+      window.removeEventListener("hashchange", follow);
+    };
+  }, []);
+  useEffect(() => {
+    document.title = VIEW_TITLES[view];
+  }, [view]);
+  return view;
+}
+
+function AccuracyPage({ apiBaseUrl }: { readonly apiBaseUrl: string }) {
+  return (
+    <ChunkBoundary what="the accuracy page" message="The accuracy page did not load. Try again in a few minutes.">
+      <Suspense fallback={<div className="accuracy" aria-busy="true" />}>
+        <LazyAccuracyView apiBaseUrl={apiBaseUrl} />
+      </Suspense>
+    </ChunkBoundary>
+  );
+}
+
+function ForecastPage({ apiBaseUrl, now }: { readonly apiBaseUrl: string; readonly now: () => number }) {
   const { load, retry } = useOutlooks(apiBaseUrl, now);
   switch (load.kind) {
     case "waiting":

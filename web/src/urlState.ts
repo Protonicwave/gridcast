@@ -31,3 +31,10 @@ export function urlWithState(href: string, state: UrlState): string {
   url.search = params.toString();
   return url.toString();
 }
+
+export type View = "forecast" | "accuracy";
+
+/** The view a page address names, such as "#accuracy". Anything else is the forecast. */
+export function parseView(hash: string): View {
+  return hash === "#accuracy" ? "accuracy" : "forecast";
+}

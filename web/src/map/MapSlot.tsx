@@ -1,4 +1,5 @@
-import { Component, lazy, type ReactNode, Suspense } from "react";
+import { lazy, Suspense } from "react";
+import { ChunkBoundary } from "../ChunkBoundary";
 import type { RegionMapProps } from "./RegionMap";
 
 /** Width over height of the map's view box. The box keeps this shape while the map loads, so its arrival shifts nothing. */
@@ -10,31 +11,10 @@ const LazyRegionMap = lazy(() => import("./RegionMap").then((module) => ({ defau
 /** The map, loaded on demand. A map that cannot load says so and leaves the rest of the page working. */
 export function MapSlot(props: RegionMapProps) {
   return (
-    <MapBoundary>
+    <ChunkBoundary what="the map" message="The map did not load. The list below still shows every region, and the chart works as usual.">
       <Suspense fallback={<div className="map map--waiting" style={{ aspectRatio: MAP_ASPECT_RATIO }} aria-busy="true" />}>
         <LazyRegionMap {...props} />
       </Suspense>
-    </MapBoundary>
+    </ChunkBoundary>
   );
-}
-
-class MapBoundary extends Component<{ readonly children: ReactNode }, { readonly failed: boolean }> {
-  override state = { failed: false };
-
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-
-  override componentDidCatch(error: unknown) {
-    console.error("the map failed to load or draw", error);
-  }
-
-  override render() {
-    if (!this.state.failed) return this.props.children;
-    return (
-      <p className="notice notice--warning" role="status">
-        The map did not load. The list below still shows every region, and the chart works as usual.
-      </p>
-    );
-  }
 }

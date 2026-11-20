@@ -115,10 +115,17 @@ a:hover { color: var(--accent-hover); }
 .site-header { border-bottom: 1px solid var(--n-6); }
 .site-header__inner {
   max-width: var(--page-max); margin: 0 auto; padding: 0 var(--space-4);
-  display: flex; align-items: center; min-height: var(--header-height);
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); min-height: var(--header-height);
 }
 .wordmark { font-weight: 700; font-size: var(--step-1); letter-spacing: -0.015em; color: var(--n-12); text-decoration: none; }
 .wordmark:hover { color: var(--n-12); }
+.site-nav ul { list-style: none; margin: 0; padding: 0; display: flex; gap: var(--space-1); }
+.site-nav a {
+  display: block; padding: var(--space-3) var(--space-2); color: var(--n-11);
+  text-decoration: none; font-weight: 600; border-bottom: 2px solid transparent;
+}
+.site-nav a:hover { color: var(--n-12); }
+.site-nav a[aria-current="page"] { color: var(--n-12); border-bottom-color: var(--accent); }
 
 /* Fills the first screen, so the footer starts below it and does not move when the forecast arrives. */
 main {
@@ -261,6 +268,47 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
   .button:active { transform: scale(0.97); }
 }
 
+/* Accuracy page */
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.muted { color: var(--n-11); }
+.small { font-size: var(--step--1); }
+.prose { max-width: 66ch; }
+.prose > * + * { margin-top: var(--space-4); }
+.section { margin-top: var(--space-8); }
+.section > h2 + * { margin-top: var(--space-4); }
+.section h3 { font-size: var(--step-0); font-weight: 650; margin-top: var(--space-6); }
+.section h3 + * { margin-top: var(--space-2); }
+.figures { display: grid; gap: var(--space-5); margin: var(--space-5) 0 0; }
+@media (min-width: 760px) { .figures { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.figures div { border-top: 2px solid var(--n-12); padding-top: var(--space-3); }
+.figures dt { font-size: var(--step-2); font-weight: 650; letter-spacing: -0.01em; line-height: 1.2; }
+.figures dd { margin: var(--space-2) 0 0; color: var(--n-11); max-width: 34ch; }
+.caveat { margin-top: var(--space-5); padding-left: var(--space-4); border-left: 3px solid var(--warning-ink); max-width: 66ch; }
+.hour-chart svg { display: block; width: 100%; height: auto; max-width: 760px; }
+.hour-chart text { font-family: var(--font-text); font-size: 12px; fill: var(--n-11); }
+.hour-chart .gridline { stroke: var(--n-6); }
+.hour-chart .bar { fill: var(--n-11); }
+.hour-chart .mean-line { stroke: var(--n-12); stroke-dasharray: 4 3; }
+.hypotheses { list-style: none; margin: var(--space-5) 0 0; padding: 0; display: grid; gap: var(--space-5); max-width: 72ch; }
+.hypotheses li { display: grid; grid-template-columns: 3rem minmax(0, 1fr); gap: var(--space-1) var(--space-3); }
+.hypotheses__id { font-weight: 700; color: var(--accent); grid-row: span 3; }
+.hypotheses__claim { font-weight: 650; }
+.hypotheses__status { font-size: var(--step--1); color: var(--n-11); }
+.status-pending { display: inline-block; padding: 0 var(--space-2); border: 1px solid var(--n-7); border-radius: var(--radius-control); margin-right: var(--space-2); color: var(--n-12); font-weight: 600; }
+.table-scroll { overflow-x: auto; max-width: 100%; }
+table.horizon { border-collapse: collapse; margin-top: var(--space-4); min-width: 560px; }
+table.horizon th, table.horizon td { text-align: left; vertical-align: top; padding: var(--space-2) var(--space-4) var(--space-2) 0; border-bottom: 1px solid var(--n-6); font-size: var(--step--1); }
+table.horizon thead th { color: var(--n-11); font-weight: 600; }
+.horizon__value { display: block; font-size: var(--step-0); font-weight: 650; color: var(--n-12); }
+.horizon__interval { display: block; color: var(--n-11); }
+.horizon__later { color: var(--n-11); }
+.reading { margin-top: var(--space-5); }
+.days { margin-top: var(--space-4); max-width: 66ch; }
+.days summary { cursor: pointer; font-weight: 600; min-height: 24px; }
+.days p { margin-top: var(--space-2); }
+.days__excluded { margin: var(--space-2) 0 0; padding-left: var(--space-5); color: var(--n-11); font-size: var(--step--1); }
+
 @media (max-width: 420px) {
+  .site-nav a { padding: var(--space-3) 6px; font-size: var(--step--1); }
   .wordmark { font-size: var(--step-0); }
 }
