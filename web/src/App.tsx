@@ -8,6 +8,7 @@ import { Readout } from "./Readout";
 import { MapSlot } from "./map/MapSlot";
 import { RegionList } from "./RegionList";
 import { ageText, fetchedPhrase } from "./time";
+import { type CursorControl, useCursor } from "./useCursor";
 import { parseUrlState, type UrlState, urlWithState } from "./urlState";
 
 const HOUR_MS = 3_600_000;
@@ -64,7 +65,8 @@ function Regions({ outlooks, nowMs }: RegionsProps) {
   const selectRegion = (regionId: number) => {
     choose({ ...urlState, regionId });
   };
-  const [cursor, setCursor] = useState(0);
+  // Every region covers the same half hours, and region 1 is always present.
+  const cursorControl = useCursor((outlooks.get(1)?.intensities.length ?? 1) - 1);
   const region = urlState.regionId === null ? undefined : outlooks.get(urlState.regionId);
   const form = <PostcodeForm onRegion={selectRegion} />;
   return (
@@ -76,8 +78,7 @@ function Regions({ outlooks, nowMs }: RegionsProps) {
           <Forecast
             key={region.regionId}
             outlook={region}
-            cursor={cursor}
-            onCursorChange={setCursor}
+            cursorControl={cursorControl}
             hours={urlState.hours}
             nowMs={nowMs}
             form={form}
@@ -88,7 +89,7 @@ function Regions({ outlooks, nowMs }: RegionsProps) {
         )}
       </div>
       <aside className="forecast-aside">
-        <MapSlot outlooks={outlooks} cursor={cursor} selectedId={region?.regionId ?? null} nowMs={nowMs} onSelect={selectRegion} />
+        <MapSlot outlooks={outlooks} cursor={cursorControl.cursor} selectedId={region?.regionId ?? null} nowMs={nowMs} onSelect={selectRegion} />
         <RegionList outlooks={outlooks} hours={urlState.hours} selectedId={region?.regionId ?? null} nowMs={nowMs} onSelect={selectRegion} />
       </aside>
     </div>
@@ -148,17 +149,16 @@ interface ForecastProps {
   readonly outlook: Outlook;
   readonly hours: DurationHours;
   readonly nowMs: number;
-  /** The half hour under the cursor, shared with the map. */
-  readonly cursor: number;
-  readonly onCursorChange: (slot: number) => void;
+  /** The half hour under the cursor, shared with the map, and the playback that steps it. */
+  readonly cursorControl: CursorControl;
   /** The postcode form, shown between the answer and the detail. */
   readonly form: ReactNode;
   readonly onSelectHours: (hours: DurationHours) => void;
 }
 
-function Forecast({ outlook, hours: selectedHours, nowMs, cursor: requestedCursor, onCursorChange, form, onSelectHours }: ForecastProps) {
+function Forecast({ outlook, hours: selectedHours, nowMs, cursorControl, form, onSelectHours }: ForecastProps) {
   const [hours, choice] = windowsFor(outlook, selectedHours);
-  const cursor = Math.min(requestedCursor, outlook.intensities.length - 1);
+  const { cursor } = cursorControl;
   const cursorValue = outlook.intensities[cursor];
   if (cursorValue === undefined) throw new RangeError(`expected a cursor inside ${String(outlook.intensities.length)} half hours, got ${String(cursor)}`);
   const cursorStartMs = outlook.firstSlotStartMs + cursor * outlook.slotMs;
@@ -180,9 +180,14 @@ function Forecast({ outlook, hours: selectedHours, nowMs, cursor: requestedCurso
         cursor={cursor}
         cursorValue={cursorValue}
         nowMs={nowMs}
-        onCursorChange={onCursorChange}
+        onCursorChange={cursorControl.moveTo}
       />
-      <p className="chart-hint">Drag along the chart, or use the arrow keys, to see any half hour on the map.</p>
+      <div className="chart-actions">
+        <button className="button button--quiet" type="button" onClick={cursorControl.togglePlaying}>
+          {cursorControl.isPlaying ? "Pause" : `Play the next ${String(spanHours)} hours`}
+        </button>
+        <span className="chart-hint">Drag along the chart, or use the arrow keys, to see any half hour on the map.</span>
+      </div>
       <Readout startMs={cursorStartMs} endMs={cursorStartMs + outlook.slotMs} nowMs={nowMs} gPerKwh={cursorValue} />
     </>
   );

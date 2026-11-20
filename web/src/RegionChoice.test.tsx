@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { rampColour } from "./chartGeometry";
 
@@ -192,4 +192,94 @@ it("recolours the map when the chart's cursor moves", async () => {
   expect(atDip[4]).toBe(rampColour(20));
   expect(atStart[4]).toBe(rampColour(50));
   expect(atDip.filter((_, index) => index !== 4)).toEqual(atStart.filter((_, index) => index !== 4));
+});
+
+const PLAY_STEP_MS = 90;
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+async function renderLondonWithFakeTimers() {
+  window.history.replaceState(null, "", "/?region=13");
+  stubNetwork();
+  renderApp();
+  const slider = await screen.findByRole("slider");
+  vi.useFakeTimers();
+  return slider;
+}
+
+/** Each step is its own act, since the next step's timer is set only after the render the last one caused. */
+function advance(ms: number) {
+  for (let elapsed = 0; elapsed < ms; elapsed += PLAY_STEP_MS) {
+    act(() => {
+      vi.advanceTimersByTime(PLAY_STEP_MS);
+    });
+  }
+}
+
+function playButton() {
+  return screen.getByRole("button", { name: /^(Play the next 48 hours|Pause)$/ });
+}
+
+it("plays the next 48 hours, one half hour every 90 ms, and offers to pause", async () => {
+  const slider = await renderLondonWithFakeTimers();
+  fireEvent.click(playButton());
+  expect(playButton().textContent).toBe("Pause");
+  advance(PLAY_STEP_MS * 3);
+  expect(slider.getAttribute("aria-valuenow")).toBe("3");
+});
+
+it("moves the map with the playing cursor", async () => {
+  window.history.replaceState(null, "", "/?region=5");
+  stubNetwork();
+  const { container } = renderApp();
+  await waitFor(() => { expect(container.querySelectorAll("path.region")).toHaveLength(14); });
+  vi.useFakeTimers();
+  fireEvent.click(playButton());
+  advance(PLAY_STEP_MS * 22);
+  expect(container.querySelectorAll("path.region")[4]?.getAttribute("fill")).toBe(rampColour(20));
+});
+
+it("stops where it is when paused", async () => {
+  const slider = await renderLondonWithFakeTimers();
+  fireEvent.click(playButton());
+  advance(PLAY_STEP_MS * 2);
+  fireEvent.click(playButton());
+  advance(PLAY_STEP_MS * 5);
+  expect(slider.getAttribute("aria-valuenow")).toBe("2");
+  expect(playButton().textContent).toBe("Play the next 48 hours");
+});
+
+it("stops at the last half hour and plays again from the start", async () => {
+  const slider = await renderLondonWithFakeTimers();
+  fireEvent.click(playButton());
+  advance(PLAY_STEP_MS * 200);
+  expect(slider.getAttribute("aria-valuenow")).toBe("95");
+  expect(playButton().textContent).toBe("Play the next 48 hours");
+  fireEvent.click(playButton());
+  expect(slider.getAttribute("aria-valuenow")).toBe("0");
+  advance(PLAY_STEP_MS * 2);
+  expect(slider.getAttribute("aria-valuenow")).toBe("2");
+});
+
+it("stops playing when the visitor moves the cursor", async () => {
+  const slider = await renderLondonWithFakeTimers();
+  fireEvent.click(playButton());
+  advance(PLAY_STEP_MS * 2);
+  fireEvent.keyDown(slider, { key: "ArrowRight" });
+  advance(PLAY_STEP_MS * 5);
+  expect(slider.getAttribute("aria-valuenow")).toBe("3");
+  expect(playButton().textContent).toBe("Play the next 48 hours");
+});
+
+it("keeps playing when another region is chosen", async () => {
+  const slider = await renderLondonWithFakeTimers();
+  fireEvent.click(playButton());
+  advance(PLAY_STEP_MS * 2);
+  fireEvent.click(within(screen.getByRole("list", { name: /Every region/ })).getByRole("button", { name: /^Yorkshire/ }));
+  advance(PLAY_STEP_MS * 2);
+  expect(screen.getByRole("slider").getAttribute("aria-valuenow")).toBe("4");
+  expect(slider.isConnected).toBe(false);
+  expect(playButton().textContent).toBe("Pause");
 });

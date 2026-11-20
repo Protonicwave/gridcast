@@ -245,6 +245,8 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .chart .cursor-dot { fill: var(--n-1); stroke: var(--n-12); stroke-width: 2; }
 .chart .halo { paint-order: stroke; stroke: var(--halo); stroke-width: 4px; stroke-linejoin: round; }
 .chart-hint { color: var(--n-11); font-size: var(--step--1); margin-top: var(--space-3); }
+.chart-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; margin-top: var(--space-3); }
+.chart-actions .chart-hint { margin-top: 0; }
 
 .readout { margin-top: var(--space-6); padding-top: var(--space-5); border-top: 1px solid var(--n-6); }
 .readout__value { font-size: var(--step-2); font-weight: 650; letter-spacing: -0.01em; margin-top: var(--space-1); }
