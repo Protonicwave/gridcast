@@ -141,6 +141,41 @@ main {
 .notice p { color: var(--n-12); }
 .notice strong { color: inherit; }
 
+.forecast-layout { display: grid; gap: var(--space-7); }
+@media (min-width: 960px) {
+  .forecast-layout { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); align-items: start; }
+  .forecast-aside { position: sticky; top: var(--space-4); }
+}
+.forecast-main { max-width: var(--content-max); }
+
+.postcode-form { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); align-items: end; margin-bottom: var(--space-6); }
+.field { display: grid; gap: var(--space-1); }
+.field > label { font-weight: 600; font-size: var(--step--1); }
+.field__error { flex-basis: 100%; color: var(--danger-ink); font-size: var(--step--1); font-weight: 600; }
+.field__error[hidden] { display: none; }
+input[type="text"] {
+  font: inherit; font-size: max(16px, 1rem); color: var(--n-12); background: var(--n-1);
+  border: 1px solid var(--n-7); border-radius: var(--radius-control);
+  padding: 0 var(--space-3); min-height: 44px; width: 10ch; text-transform: uppercase;
+}
+input[type="text"]::placeholder { text-transform: none; color: var(--n-9); }
+input[aria-invalid="true"] { border-color: var(--danger-ink); }
+.postcode-form__or { color: var(--n-11); font-size: var(--step--1); padding-bottom: 11px; }
+.button[aria-busy="true"] { cursor: progress; }
+
+.region-list { list-style: none; margin: var(--space-3) 0 0; padding: 0; }
+.region-row {
+  width: 100%; font: inherit; color: inherit; text-align: left; cursor: pointer;
+  background: transparent; border: 0; border-radius: var(--radius-control);
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-2); min-height: 44px;
+}
+.region-row:hover { background: var(--n-3); }
+.region-row[aria-pressed="true"] { background: var(--accent-wash); }
+.region-row__name { font-weight: 600; font-size: var(--step--1); }
+.region-row__when { font-size: var(--step--1); color: var(--n-11); text-align: right; white-space: nowrap; }
+.region-row__strip { grid-column: 1 / -1; display: block; width: 100%; height: 12px; shape-rendering: crispEdges; }
+
 .freshness { color: var(--n-11); font-size: var(--step--1); margin-bottom: var(--space-5); }
 
 .button {
@@ -200,6 +235,7 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .site-footer p { max-width: 90ch; }
 
 @media (prefers-reduced-motion: no-preference) {
+  .region-row { transition: background-color var(--dur-1) var(--ease-out); }
   .button { transition: background-color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out); }
   .button:active { transform: scale(0.97); }
 }

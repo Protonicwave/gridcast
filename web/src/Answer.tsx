@@ -45,7 +45,7 @@ export function Answer({ outlook, hours, choice, spanHours, nowMs }: AnswerProps
   );
 }
 
-function Spread({ choice }: { readonly choice: DurationWindows }) {
+export function Spread({ choice }: { readonly choice: DurationWindows }) {
   const low = grams(choice.cleanest.meanGPerKwh);
   const high = grams(choice.dirtiest.meanGPerKwh);
   if (low === high) {

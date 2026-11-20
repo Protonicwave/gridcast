@@ -1,7 +1,14 @@
-/** Fetches a region's outlook from the Gridcast API and checks it before anything draws it. */
+/** Fetches every region's outlook from the Gridcast API and checks it before anything draws it. */
 
 export const DURATIONS_HOURS = [1, 2, 3, 4] as const;
 export type DurationHours = (typeof DURATIONS_HOURS)[number];
+
+/** Great Britain's distribution network regions, numbered 1 to 14 as the Carbon Intensity API numbers them. */
+const REGION_COUNT = 14;
+
+export function isRegionId(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= REGION_COUNT;
+}
 
 export interface ForecastWindow {
   /** Index of the window's first half hour in `Outlook.intensities`. */
@@ -16,6 +23,7 @@ export interface DurationWindows {
 }
 
 export interface Outlook {
+  readonly regionId: number;
   readonly regionName: string;
   readonly fetchedAtMs: number;
   /** Start of the half hour that held the request time; `intensities[0]` is that half hour. */
@@ -40,14 +48,15 @@ const UTC_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?Z$/;
 const DURATION_BY_KEY = new Map(DURATIONS_HOURS.map((hours) => [String(hours), hours]));
 
 /**
- * The outlook for `regionId` from the API at `apiBaseUrl` (empty for the page's own origin).
+ * The outlooks of all 14 regions from the API at `apiBaseUrl` (empty for the page's own origin),
+ * by region id.
  *
  * Rejects with OutlookUnavailableError, naming the problem, when the API cannot be reached within
- * 10 seconds, answers with another status, or sends a malformed outlook. An abort through `signal`
- * rejects with the abort's own error.
+ * 10 seconds, answers with another status, or sends anything but one well-formed outlook for each
+ * region from 1 to 14. An abort through `signal` rejects with the abort's own error.
  */
-export async function fetchOutlook(apiBaseUrl: string, regionId: number, signal: AbortSignal): Promise<Outlook> {
-  const url = `${apiBaseUrl}/regions/${String(regionId)}/outlook`;
+export async function fetchOutlooks(apiBaseUrl: string, signal: AbortSignal): Promise<ReadonlyMap<number, Outlook>> {
+  const url = `${apiBaseUrl}/regions/outlook`;
   let response: Response;
   try {
     response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]) });
@@ -65,10 +74,27 @@ export async function fetchOutlook(apiBaseUrl: string, regionId: number, signal:
     if (signal.aborted) throw error;
     throw new OutlookUnavailableError(`expected JSON from ${url}`, { cause: error });
   }
-  return parseOutlook(payload, regionId);
+  return parseOutlooks(payload);
+}
+
+/** The chosen duration's windows, or the longest that fits when the forecast is too short for it. */
+export function windowsFor(outlook: Outlook, selected: DurationHours): readonly [DurationHours, DurationWindows] {
+  const chosen = outlook.windows.get(selected);
+  if (chosen !== undefined) return [selected, chosen];
+  const longest = [...outlook.windows].at(-1);
+  if (longest === undefined) throw new RangeError("expected an outlook with at least one duration's windows");
+  return longest;
 }
 
 type Fields = Readonly<Record<string, unknown>>;
+
+function parseOutlooks(payload: unknown): ReadonlyMap<number, Outlook> {
+  if (!Array.isArray(payload) || payload.length !== REGION_COUNT) {
+    const shown = Array.isArray(payload) ? `${String(payload.length)} outlooks` : describe(payload);
+    throw new OutlookUnavailableError(`expected ${String(REGION_COUNT)} outlooks, got ${shown}`);
+  }
+  return new Map(payload.map((entry: unknown, index) => [index + 1, parseOutlook(entry, index + 1)] as const));
+}
 
 function parseOutlook(payload: unknown, regionId: number): Outlook {
   const body = requireObject(payload, "the outlook");
@@ -78,6 +104,7 @@ function parseOutlook(payload: unknown, regionId: number): Outlook {
   if (body["slotMinutes"] !== SLOT_MINUTES) fail(`slotMinutes ${String(SLOT_MINUTES)}`, body["slotMinutes"]);
   const intensities = parseIntensities(body["intensities"]);
   return {
+    regionId,
     regionName,
     fetchedAtMs: parseUtcTime(body["fetchedAt"], "fetchedAt"),
     firstSlotStartMs: parseUtcTime(body["firstSlotStart"], "firstSlotStart"),
