@@ -23,7 +23,7 @@ GZIP_LEVEL = 6
 ENTRY_BUDGET_KIB = 80
 TOTAL_BUDGET_KIB = 110
 # Lazily loaded chunks by the source file Vite names in its manifest.
-CHUNK_BUDGETS_KIB = {"src/map/RegionMap.tsx": 16}
+CHUNK_BUDGETS_KIB = {"src/map/RegionMap.tsx": 16, "src/accuracy/AccuracyView.tsx": 10}
 EXIT_OVER_BUDGET = 1
 EXIT_UNREADABLE = 2
 

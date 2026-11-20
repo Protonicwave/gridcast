@@ -173,3 +173,21 @@ def test_reports_a_listed_chunk_that_is_not_on_disk(
     (tmp_path / "assets" / "index.js").unlink()
     assert check_bundle.main([str(tmp_path)]) == 2
     assert "index.js" in capsys.readouterr().err
+
+
+def test_fails_when_the_accuracy_chunk_is_over_its_budget(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_dist(tmp_path, accuracy_bytes=11 * KIB)
+    status, report = _run(tmp_path, capsys)
+    assert status == 1
+    assert f"{ACCURACY_SOURCE}: over, " in report
+
+
+def test_fails_when_the_accuracy_chunk_is_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_dist(tmp_path, accuracy_bytes=None)
+    status, report = _run(tmp_path, capsys)
+    assert status == 1
+    assert f"{ACCURACY_SOURCE}: missing" in report
