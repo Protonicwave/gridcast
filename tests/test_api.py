@@ -136,3 +136,14 @@ def test_names_the_variable_that_is_not_set(missing: str, monkeypatch: pytest.Mo
     monkeypatch.delenv(missing)
     with pytest.raises(RuntimeError, match=missing):
         app_from_environment()
+
+
+def test_refuses_all_regions_when_one_covers_different_half_hours(archive: Archive) -> None:
+    store(archive, OK, None, slots=12)
+    archive.execute(
+        "update forecast_issue set first_slot = first_slot - interval '1 hour' where area_id = 5"
+    )
+    archive.commit()
+    response = client_for(archive.info.dsn).get("/regions/outlook")
+    assert response.status_code == 503
+    assert "different half hours" in response.json()["detail"]

@@ -2,7 +2,7 @@
 
 import logging
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, time
 from typing import Annotated, Any
@@ -27,6 +27,7 @@ from gridcast.archive import (
     national_issues,
 )
 from gridcast.forecast import SLOT_MINUTES, format_slot_time
+from gridcast.issues import StoredIssue
 from gridcast.outlook import DurationWindows, Outlook, build_outlook
 from gridcast.regions import REGIONS
 from gridcast.windows import Window
@@ -73,18 +74,7 @@ def create_app(
     def all_outlooks(response: Response) -> list[dict[str, Any]]:
         with _archive_connection(database_url) as connection:
             issues = latest_issues(connection)
-        current = now()
-        outlooks: list[Outlook] = []
-        missing: list[int] = []
-        for region in REGIONS:
-            issue = issues.get(region.api_id)
-            outlook = None if issue is None else build_outlook(region, issue, current)
-            if outlook is None:
-                missing.append(region.api_id)
-            else:
-                outlooks.append(outlook)
-        if missing:
-            raise HTTPException(503, f"no current forecast for regions {missing}")
+        outlooks = _every_outlook(issues, now())
         response.headers["Cache-Control"] = f"public, max-age={CACHE_MAX_AGE_SECONDS}"
         return [_outlook_body(outlook) for outlook in outlooks]
 
@@ -157,6 +147,25 @@ def _archive_connection(database_url: str) -> Iterator[psycopg.Connection[Any]]:
         # The class only: the message can hold the connection URL.
         log.error("archive unavailable error_class=%s", type(err).__name__)
         raise HTTPException(503, "the forecast archive is unavailable") from err
+
+
+def _every_outlook(issues: Mapping[int, StoredIssue], current: datetime) -> list[Outlook]:
+    """One outlook per region, or a 503 naming why the site cannot draw them together."""
+    outlooks: list[Outlook] = []
+    missing: list[int] = []
+    for region in REGIONS:
+        issue = issues.get(region.api_id)
+        outlook = None if issue is None else build_outlook(region, issue, current)
+        if outlook is None:
+            missing.append(region.api_id)
+        else:
+            outlooks.append(outlook)
+    if missing:
+        raise HTTPException(503, f"no current forecast for regions {missing}")
+    # The site draws every region at one half hour, so regions must cover the same ones.
+    if len({(o.first_slot_start, len(o.intensities_g_per_kwh)) for o in outlooks}) != 1:
+        raise HTTPException(503, "the newest forecasts cover different half hours")
+    return outlooks
 
 
 def _midnight(day: date) -> datetime:
