@@ -54,7 +54,7 @@ Serve the site against that API. The dev server forwards `/regions` to `127.0.0.
 npm --prefix web run dev
 ```
 
-For a build that calls a deployed API instead, set `VITE_GRIDCAST_API_URL` to its origin: `VITE_GRIDCAST_API_URL=<origin> npm --prefix web run build`. The page fetches the outlook on load and again when it becomes visible after ten minutes. It abandons a request after 10 seconds, so after a cold start the first visitor can see the unavailable state with a retry button.
+For a build that calls a deployed API instead, set `VITE_GRIDCAST_API_URL` to its origin: `VITE_GRIDCAST_API_URL=<origin> npm --prefix web run build`. The page fetches the outlook on load and again when it becomes visible after ten minutes. It abandons a request after 10 seconds, so a slow start would show the unavailable state with a retry button.
 
 Open `mockup/mockup.html` in a browser. The postcode lookup calls NESO's Carbon Intensity API, so it needs a network connection; everything else works offline.
 
@@ -81,7 +81,7 @@ On each pull request, GitHub Actions runs the checks below, builds both images a
 
 ## Deploy
 
-The collector runs on Azure as a Container Apps job at 5 and 35 minutes past each hour, UTC, writing to a PostgreSQL 17 flexible server. The container app `ca-gridcast-api` serves the outlook from the same server as the read-only role, scaling to zero when idle. Every resource is in Norway East, and `infra/` describes them in Terraform. The server accepts connections from Azure services only, other customers' included, so its passwords are the barrier. A second job, started by hand, applies migrations from inside Azure.
+The collector runs on Azure as a Container Apps job at 5 and 35 minutes past each hour, UTC, writing to a PostgreSQL 17 flexible server. The container app `ca-gridcast-api` serves the outlook from the same server as the read-only role, keeping one replica running so there is no cold start. Every resource is in Norway East, and `infra/` describes them in Terraform. The server accepts connections from Azure services only, other customers' included, so its passwords are the barrier. A second job, started by hand, applies migrations from inside Azure.
 
 Needs the Azure CLI, logged in with `az login`, and Terraform 1.17. Once per subscription, register the resource providers and create the storage for Terraform's state, which holds the database passwords:
 
@@ -112,7 +112,7 @@ terraform -chdir=infra output api_url
 
 The migrate job runs the API image, which holds the same package as the collector's, so a migration needs no new collector image. It connects as the server's admin, applies pending migrations and lets the collector's and the API's roles log in with passwords Terraform generated. The collector's role may only insert and select, and update actuals; the API's may only select forecasts and when they were fetched. `api_image` sets the API app's image only when the app is created: later images go to it with `az containerapp update`.
 
-The API's budget is a median under 500 ms for London's outlook over 20 warm requests. This measures it, and reports the first request separately because it includes a cold start when the app has scaled to zero; it exits 1 over budget:
+The API's budget is a median under 500 ms for London's outlook over 20 warm requests. This measures it, and reports the first request separately because it includes a cold start if the app has been scaled to zero; it exits 1 over budget:
 
 ```sh
 uv run python scripts/time_outlook.py "$(terraform -chdir=infra output -raw api_url)"
