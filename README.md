@@ -2,7 +2,7 @@
 
 Gridcast tells each of the 14 regions of Great Britain when its electricity will be cleanest in the next 48 hours, and measures how good that advice is.
 
-This repository holds the collector, which archives NESO's Carbon Intensity forecast every half hour, the API that serves a region's cleanest windows from that archive, the React site in `web/` that shows London's, and the interface mock-up the site was ported from.
+This repository holds the collector, which archives NESO's Carbon Intensity forecast every half hour, the API that serves a region's cleanest windows from that archive, the React site in `web/`, which answers for any region by postcode, list or map and has an accuracy page, and the interface mock-up the site was ported from.
 
 ## Install
 
@@ -50,7 +50,7 @@ curl http://127.0.0.1:8000/regions/13/outlook
 
 `/accuracy/national` reports NESO's national forecast error for lead times of 1 to 6, 6 to 12, 12 to 24 and 24 to 48 hours, with a 95% interval for each and for the difference between the last and the first once seven days are usable. `?until=YYYY-MM-DD` stops the evaluation before that UTC day; it never reads the day under way. A day is used only when all 48 actuals are stored and every band holds at least 90% of its nominal pairs; the others are listed with the reason. It answers 422 for a malformed `until` and 503 when the archive cannot be read.
 
-Serve the site against that API. The dev server forwards `/regions` to `127.0.0.1:8000`, so no cross-origin setting is needed:
+Serve the site against that API. The dev server forwards `/regions` and `/accuracy` to `127.0.0.1:8000`, so no cross-origin setting is needed:
 
 ```sh
 npm --prefix web run dev
@@ -138,7 +138,7 @@ The site is published to GitHub Pages at `https://protonicwave.github.io/gridcas
 
 1. `deploy-api` signs in to Azure as the deploy identity, points `ca-gridcast-api` at the commit's image and waits for London's outlook to answer 200.
 2. `deploy-site` builds the site with the API's origin and publishes it.
-3. `smoke` runs `npm --prefix web run smoke`, a Playwright test that opens the published page and expects London's answer and a drawn series. Run it by hand with `SITE_URL=<page url> npm --prefix web run smoke` after `npx playwright install chromium`.
+3. `smoke` runs `npm --prefix web run smoke`, a Playwright test that opens the published page and expects London's answer, a drawn series and the map's 14 regions, then opens the accuracy page and expects NESO's row of the error table. Run it by hand with `SITE_URL=<page url> npm --prefix web run smoke` after `npx playwright install chromium`.
 
 The jobs need configuration in the repository, set once:
 
@@ -151,7 +151,7 @@ CI deploys the API image but does not run migrations. Before merging a commit th
 
 The API's origin is built into the page, and the API allows only the Pages origin, so a custom domain needs `GRIDCAST_ALLOWED_ORIGIN` changed in `infra/` as well.
 
-Budgets for the page: compressed script of at most 80 KiB for the entry chunk, 16 KiB for the map's lazily loaded chunk and 110 KiB for all of it, and on Lighthouse mobile an LCP of at most 2.5 s and a CLS of at most 0.1. After a build, this reports each figure against its budget and exits 1 over one; CI runs it in the `site` job:
+Budgets for the page: compressed script of at most 80 KiB for the entry chunk, 16 KiB for the map's lazily loaded chunk, 10 KiB for the accuracy page's and 110 KiB for all of it, and on Lighthouse mobile an LCP of at most 2.5 s and a CLS of at most 0.1. After a build, this reports each figure against its budget and exits 1 over one; CI runs it in the `site` job:
 
 ```sh
 npm --prefix web run build
